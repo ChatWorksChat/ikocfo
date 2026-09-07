@@ -30,17 +30,10 @@
   color: var(--color-primary);
 }
 
-.header-logo-icon {
-  width: 36px;
-  height: 36px;
-  background: var(--color-primary);
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-weight: 900;
-  font-size: var(--font-size-sm);
+.header-logo-img {
+  height: 48px;
+  width: auto;
+  object-fit: contain;
 }
 
 .header-nav {
@@ -154,6 +147,14 @@
   grid-template-columns: 2fr 1fr 1fr;
   gap: 40px;
   margin-bottom: 40px;
+}
+
+.footer-logo-img {
+  height: 60px;
+  width: auto;
+  object-fit: contain;
+  margin-bottom: 12px;
+  filter: brightness(0) invert(1);
 }
 
 .footer-brand h3 {

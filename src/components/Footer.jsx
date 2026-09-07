@@ -6,6 +6,7 @@ export default function Footer() {
       <div className="footer-inner">
         <div className="footer-grid">
           <div className="footer-brand">
+            <img src="/logo.png" alt="IKO CFO" className="footer-logo-img" />
             <h3>IKO CFO</h3>
             <p>
               Expert financial advisory with 20+ years of experience.

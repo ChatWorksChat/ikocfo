@@ -17,8 +17,7 @@ export default function Header() {
     <header className="header">
       <div className="header-inner">
         <Link to="/" className="header-logo">
-          <div className="header-logo-icon">IKO</div>
-          CFO
+          <img src="/logo.png" alt="IKO CFO" className="header-logo-img" />
         </Link>
 
         <button
