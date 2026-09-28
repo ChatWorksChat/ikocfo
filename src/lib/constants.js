@@ -73,6 +73,7 @@ export const STORAGE_KEYS = {
 
 export const COLUMN_TYPES = [
   { key: 'date', label: 'Date' },
+  { key: 'valueDate', label: 'Value Date' },
   { key: 'description', label: 'Description' },
   { key: 'debit', label: 'Debit' },
   { key: 'credit', label: 'Credit' },
@@ -80,4 +81,15 @@ export const COLUMN_TYPES = [
   { key: 'interest', label: 'Interest' },
   { key: 'fees', label: 'Fees' },
   { key: 'ignore', label: 'Ignore' },
+];
+
+export const BANK_RATES = [
+  {
+    id: 'vcb',
+    name: 'Victoria Commercial Bank',
+    aliases: ['VCB', 'Victoria Commercial', 'VICTORIA COMMERCIAL BANK'],
+    odAPR: 14.7,
+    currency: 'KES',
+    country: 'Kenya',
+  },
 ];

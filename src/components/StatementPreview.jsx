@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { autoDetectColumns } from '../lib/statementMapper.js';
-import { COLUMN_TYPES, CURRENCIES } from '../lib/constants.js';
+import { autoDetectColumns, detectBank } from '../lib/statementMapper.js';
+import { COLUMN_TYPES, CURRENCIES, BANK_RATES } from '../lib/constants.js';
 
 export default function StatementPreview({ parsedData, onConfirm }) {
   const { headers, rows } = parsedData;
@@ -8,11 +8,20 @@ export default function StatementPreview({ parsedData, onConfirm }) {
   const [nominalRate, setNominalRate] = useState('');
   const [overdraftLimit, setOverdraftLimit] = useState('');
   const [currency, setCurrency] = useState('KES');
+  const [detectedBank, setDetectedBank] = useState(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
     setColumnMapping(autoDetectColumns(headers));
-  }, [headers]);
+
+    // Auto-detect bank and pre-fill nominal rate
+    const bank = detectBank(rows, headers, BANK_RATES);
+    if (bank) {
+      setDetectedBank(bank);
+      setNominalRate(String(bank.odAPR));
+      if (bank.currency) setCurrency(bank.currency);
+    }
+  }, [headers, rows]);
 
   function handleMappingChange(header, type) {
     setColumnMapping(prev => ({ ...prev, [header]: type }));
@@ -49,6 +58,12 @@ export default function StatementPreview({ parsedData, onConfirm }) {
       <p style={{ color: 'var(--color-text-light)', marginBottom: '24px', fontSize: 'var(--font-size-sm)' }}>
         Showing first {Math.min(10, rows.length)} of {rows.length} rows. Verify the auto-detected column types and adjust if needed.
       </p>
+
+      {detectedBank && (
+        <div className="alert alert-success" style={{ marginBottom: '16px' }}>
+          Detected bank: <strong>{detectedBank.name}</strong> — nominal OD rate pre-filled at {detectedBank.odAPR}%.
+        </div>
+      )}
 
       {error && <div className="alert alert-error">{error}</div>}
 

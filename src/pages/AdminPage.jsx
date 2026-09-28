@@ -6,6 +6,7 @@ import {
   updateUserRole,
   sendCredentials,
 } from '../lib/auth.js';
+import { BANK_RATES } from '../lib/constants.js';
 
 const TABS = ['Overview', 'Users', 'System'];
 
@@ -324,6 +325,42 @@ export default function AdminPage() {
               <div className="admin-stat-label">SES Status</div>
             </div>
           </div>
+
+          <h3 style={{ marginTop: '32px', marginBottom: '16px' }}>Bank Overdraft Rates</h3>
+          <div className="glass-card" style={{ padding: '4px' }}>
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Bank</th>
+                    <th>Country</th>
+                    <th>Currency</th>
+                    <th>OD APR</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {BANK_RATES.map((bank) => (
+                    <tr key={bank.id}>
+                      <td>{bank.name}</td>
+                      <td>{bank.country}</td>
+                      <td>{bank.currency}</td>
+                      <td style={{ fontWeight: 700 }}>{bank.odAPR}%</td>
+                    </tr>
+                  ))}
+                  {BANK_RATES.length === 0 && (
+                    <tr>
+                      <td colSpan="4" style={{ textAlign: 'center', padding: '24px', color: 'var(--color-text-muted)' }}>
+                        No bank rates configured.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <p style={{ marginTop: '8px', fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)' }}>
+            These rates are used for auto-detection when a bank statement is uploaded.
+          </p>
         </div>
       )}
     </div>

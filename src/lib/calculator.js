@@ -3,6 +3,7 @@
 import { calculateCostRatio, nominalToEAR } from './earCalculator.js';
 import { calculateXIRR, buildCashFlows } from './xirr.js';
 import { runRegulatoryChecks } from './regulatoryChecks.js';
+import { classifyTransactions } from './statementMapper.js';
 
 /**
  * Run the full overdraft audit calculation.
@@ -17,12 +18,15 @@ import { runRegulatoryChecks } from './regulatoryChecks.js';
  * @returns {Object} Full results object
  */
 export function runCalculation({ transactions, currency, nominalRate, overdraftLimit, includeXIRR, fileName }) {
+  // Classify transactions to separate OD interest from other-facility interest
+  const classified = classifyTransactions(transactions);
+
   const results = {
     fileName,
     currency,
     nominalRate,
     overdraftLimit,
-    transactionCount: transactions.length,
+    transactionCount: classified.length,
     costRatio: null,
     xirr: null,
     nominalEAR: null,
@@ -30,8 +34,8 @@ export function runCalculation({ transactions, currency, nominalRate, overdraftL
     effectiveAPR: null,
   };
 
-  // 1. Cost-ratio method
-  const costRatioResult = calculateCostRatio(transactions, currency);
+  // 1. Cost-ratio method (with classification-aware interest separation)
+  const costRatioResult = calculateCostRatio(classified, currency);
   if (costRatioResult.error) {
     results.error = costRatioResult.error;
     return results;
@@ -46,7 +50,7 @@ export function runCalculation({ transactions, currency, nominalRate, overdraftL
 
   // 3. XIRR method (if enabled)
   if (includeXIRR) {
-    const cashFlows = buildCashFlows(transactions);
+    const cashFlows = buildCashFlows(classified);
     if (cashFlows.length >= 2) {
       const xirrResult = calculateXIRR(cashFlows);
       results.xirr = xirrResult;
@@ -58,7 +62,7 @@ export function runCalculation({ transactions, currency, nominalRate, overdraftL
   }
 
   // 4. Regulatory checks
-  results.regulatoryFlags = runRegulatoryChecks(transactions, {
+  results.regulatoryFlags = runRegulatoryChecks(classified, {
     overdraftLimit,
     nominalRate,
     currency,

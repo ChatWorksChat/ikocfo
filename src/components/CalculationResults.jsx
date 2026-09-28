@@ -16,6 +16,8 @@ export default function CalculationResults({ results }) {
     : 50;
   const effectiveWidth = 100 - nominalWidth;
 
+  const hasOtherFacility = costRatio && costRatio.otherFacilityInterest > 0;
+
   return (
     <div>
       {/* Primary metric */}
@@ -51,12 +53,12 @@ export default function CalculationResults({ results }) {
         )}
       </div>
 
-      {/* Breakdown */}
+      {/* Cost Breakdown */}
       {costRatio && (
         <div className="breakdown-grid">
           <div className="breakdown-card glass-card">
-            <div className="breakdown-value">{formatCurrency(costRatio.totalInterest, currency)}</div>
-            <div className="breakdown-label">Total Interest</div>
+            <div className="breakdown-value">{formatCurrency(costRatio.overdraftInterest, currency)}</div>
+            <div className="breakdown-label">Overdraft Interest</div>
           </div>
           <div className="breakdown-card glass-card">
             <div className="breakdown-value">{formatCurrency(costRatio.totalFees, currency)}</div>
@@ -69,6 +71,23 @@ export default function CalculationResults({ results }) {
           <div className="breakdown-card glass-card">
             <div className="breakdown-value">{formatCurrency(costRatio.avgBalance, currency)}</div>
             <div className="breakdown-label">Avg. Outstanding Balance</div>
+          </div>
+        </div>
+      )}
+
+      {/* Other-facility interest notice */}
+      {hasOtherFacility && (
+        <div className="glass-card" style={{ padding: '20px', marginBottom: '24px', borderLeft: '4px solid var(--color-primary)' }}>
+          <h4 style={{ marginBottom: '8px' }}>Other Credit Facility Interest</h4>
+          <p style={{ color: 'var(--color-text-light)', fontSize: 'var(--font-size-sm)', marginBottom: '8px' }}>
+            The statement includes interest charged for another credit facility. This amount is
+            <strong> excluded</strong> from the overdraft cost calculation.
+          </p>
+          <div style={{ fontSize: 'var(--font-size-lg)', fontWeight: 700, color: 'var(--color-text-muted)' }}>
+            {formatCurrency(costRatio.otherFacilityInterest, currency)}
+            <span style={{ fontSize: 'var(--font-size-sm)', fontWeight: 400, marginLeft: '8px' }}>
+              (not included in effective rate)
+            </span>
           </div>
         </div>
       )}
@@ -122,6 +141,9 @@ export default function CalculationResults({ results }) {
             Date Range: {formatDateRange(costRatio.startDate, costRatio.endDate)} &middot;{' '}
             {formatNumber(costRatio.totalDays)} days &middot;{' '}
             {formatNumber(results.transactionCount)} transactions
+            {costRatio.usedValueDates && (
+              <span> &middot; Balance weighted by value dates</span>
+            )}
           </p>
         </div>
       )}

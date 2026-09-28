@@ -78,6 +78,8 @@ export function calculateXIRR(transactions, guess = 0.1) {
 /**
  * Build XIRR cash flows from parsed statement transactions.
  * Treats the overdraft balance as the investment, and interest/fees as costs.
+ * Classification-aware: uses debit amounts for interest/fees when no dedicated columns exist.
+ * Excludes other-facility interest (only counts overdraft interest).
  */
 export function buildCashFlows(transactions) {
   const flows = [];
@@ -89,11 +91,15 @@ export function buildCashFlows(transactions) {
       fees: parseNumeric(t.fees),
       debit: parseNumeric(t.debit),
       credit: parseNumeric(t.credit),
+      classification: t.classification || 'regular',
     }))
     .filter(t => t.date !== null)
     .sort((a, b) => a.date - b.date);
 
   if (sorted.length === 0) return flows;
+
+  const hasInterestColumn = sorted.some(t => t.interest !== 0);
+  const hasFeesColumn = sorted.some(t => t.fees !== 0);
 
   // Initial balance as positive inflow (bank lends money)
   const first = sorted[0];
@@ -106,11 +112,22 @@ export function buildCashFlows(transactions) {
 
   // Interest and fees are negative outflows (cost to borrower)
   for (const tx of sorted) {
-    if (tx.interest !== 0) {
+    // Interest from explicit column (exclude other-facility)
+    if (hasInterestColumn && tx.interest !== 0 && tx.classification !== 'other_facility_interest') {
       flows.push({ date: tx.date, amount: -Math.abs(tx.interest) });
     }
-    if (tx.fees !== 0) {
+    // Interest from classified debit entries
+    if (!hasInterestColumn && tx.classification === 'overdraft_interest') {
+      flows.push({ date: tx.date, amount: -Math.abs(tx.debit) });
+    }
+
+    // Fees from explicit column
+    if (hasFeesColumn && tx.fees !== 0) {
       flows.push({ date: tx.date, amount: -Math.abs(tx.fees) });
+    }
+    // Fees from classified debit entries
+    if (!hasFeesColumn && tx.classification === 'fee') {
+      flows.push({ date: tx.date, amount: -Math.abs(tx.debit) });
     }
   }
 
