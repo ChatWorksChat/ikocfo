@@ -1,55 +1,84 @@
-// Authentication facade — localStorage-based for MVP
-// Can be swapped to Lambda + DynamoDB later
+// Authentication module — calls Lambda API backend
 
-import {
-  findUserByEmail,
-  addUser,
-  updateUser,
-  getSession,
-  setSession,
-  clearSession,
-} from './storage.js';
+import { API_URL } from './constants.js';
+import { getSession, setSession, clearSession } from './storage.js';
 
-export function register({ email, password, firstName, lastName, accountType, companyName, companyAddress, position }) {
-  const existing = findUserByEmail(email);
-  if (existing) {
-    return { success: false, error: 'An account with this email already exists.' };
-  }
-
-  const user = {
-    email: email.toLowerCase().trim(),
-    password, // MVP only — would be hashed in production
-    firstName: firstName || '',
-    lastName: lastName || '',
-    accountType: accountType || 'individual',
-    companyName: companyName || '',
-    companyAddress: companyAddress || '',
-    position: position || '',
-    plan: 'free',
-    verified: true, // auto-verified for MVP
-    createdAt: new Date().toISOString(),
-  };
-
-  addUser(user);
-  setSession(user);
-
-  return { success: true, user };
+async function apiCall(path, body) {
+  const res = await fetch(`${API_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return res.json();
 }
 
-export function login(email, password) {
-  const user = findUserByEmail(email);
-  if (!user) {
-    return { success: false, error: 'No account found with this email.' };
-  }
-  if (user.password !== password) {
-    return { success: false, error: 'Incorrect password.' };
-  }
-  if (!user.verified) {
-    return { success: false, error: 'Please verify your email first.' };
-  }
+async function apiGet(path) {
+  const res = await fetch(`${API_URL}${path}`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  return res.json();
+}
 
-  setSession(user);
-  return { success: true, user };
+async function apiPut(path, body) {
+  const res = await fetch(`${API_URL}${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+export async function register({ email, password, firstName, lastName, accountType, companyName, companyAddress, position }) {
+  try {
+    const data = await apiCall('/auth/register', {
+      email, password, firstName, lastName, accountType,
+      companyName, companyAddress, position,
+    });
+    if (data.error) {
+      return { success: false, error: data.error };
+    }
+    return { success: true, email: data.email };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+export async function verifyEmail(email, code) {
+  try {
+    const data = await apiCall('/auth/verify', { email, code });
+    if (data.error) {
+      return { success: false, error: data.error };
+    }
+    return { success: true };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+export async function resendCode(email) {
+  try {
+    const data = await apiCall('/auth/resend', { email });
+    if (data.error) {
+      return { success: false, error: data.error };
+    }
+    return { success: true };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+export async function login(email, password) {
+  try {
+    const data = await apiCall('/auth/login', { email, password });
+    if (data.error) {
+      return { success: false, error: data.error };
+    }
+    setSession(data.user);
+    return { success: true, user: data.user };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
 }
 
 export function logout() {
@@ -64,20 +93,62 @@ export function isAuthenticated() {
   return getSession() !== null;
 }
 
-export function verifyEmail(token) {
-  // MVP: auto-verified on registration
-  // Extension point: validate token, update user.verified = true
-  return { success: true };
+export function upgradeUserPlan(email, plan) {
+  const session = getSession();
+  if (session && session.email.toLowerCase() === email.toLowerCase()) {
+    setSession({ ...session, plan });
+  }
+  return true;
 }
 
-export function upgradeUserPlan(email, plan) {
-  const updated = updateUser(email, { plan });
-  if (updated) {
-    // Update session too
-    const session = getSession();
-    if (session && session.email.toLowerCase() === email.toLowerCase()) {
-      setSession({ ...session, plan });
-    }
+// Admin API calls
+
+export async function fetchAdminUsers() {
+  try {
+    const data = await apiGet('/admin/users');
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, users: data.users };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
   }
-  return updated;
+}
+
+export async function updateUserStatus(email, status) {
+  try {
+    const data = await apiPut(`/admin/users/${encodeURIComponent(email)}/status`, { status });
+    if (data.error) return { success: false, error: data.error };
+    return { success: true };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
+export async function updateUserRole(email, role) {
+  try {
+    const data = await apiPut(`/admin/users/${encodeURIComponent(email)}/role`, { role });
+    if (data.error) return { success: false, error: data.error };
+    return { success: true };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
+export async function fetchAdminStats() {
+  try {
+    const data = await apiGet('/admin/stats');
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, stats: data.stats };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
+export async function sendCredentials(email) {
+  try {
+    const data = await apiCall('/admin/send-credentials', { email });
+    if (data.error) return { success: false, error: data.error };
+    return { success: true };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
 }

@@ -43,14 +43,14 @@ export default function FileUploader({ onFileSelected, disabled }) {
     >
       <div className="file-uploader-icon">&#128196;</div>
       <h3>Upload Bank Statement</h3>
-      <p>Drag and drop your CSV or XLSX file here, or click to browse</p>
+      <p>Drag and drop your CSV, XLSX, or PDF file here, or click to browse</p>
       <p style={{ marginTop: '12px', fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
         Your data stays in your browser &mdash; nothing is uploaded to any server.
       </p>
       <input
         ref={inputRef}
         type="file"
-        accept=".csv,.xlsx,.xls,.tsv,.txt"
+        accept=".csv,.xlsx,.xls,.tsv,.txt,.pdf"
         onChange={handleChange}
         style={{ display: 'none' }}
       />

@@ -43,6 +43,9 @@ export const PLANS = {
   },
 };
 
+// API URL for backend (Lambda + API Gateway)
+export const API_URL = import.meta.env.VITE_API_URL || '';
+
 // Stripe configuration
 // Replace these with actual Stripe keys after running the setup script
 export const STRIPE = {

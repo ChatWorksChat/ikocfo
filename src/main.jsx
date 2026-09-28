@@ -10,8 +10,10 @@ import VerifyEmailPage from './pages/VerifyEmailPage.jsx';
 import DashboardPage from './pages/DashboardPage.jsx';
 import CalculatorPage from './pages/CalculatorPage.jsx';
 import PricingPage from './pages/PricingPage.jsx';
+import AdminPage from './pages/AdminPage.jsx';
 import NotFoundPage from './pages/NotFoundPage.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
+import AdminRoute from './components/AdminRoute.jsx';
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
@@ -37,6 +39,14 @@ createRoot(document.getElementById('root')).render(
               <ProtectedRoute>
                 <CalculatorPage />
               </ProtectedRoute>
+            }
+          />
+          <Route
+            path="admin"
+            element={
+              <AdminRoute>
+                <AdminPage />
+              </AdminRoute>
             }
           />
           <Route path="*" element={<NotFoundPage />} />

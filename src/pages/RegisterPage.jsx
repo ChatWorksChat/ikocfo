@@ -5,12 +5,16 @@ import { register } from '../lib/auth.js';
 
 export default function RegisterPage() {
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  function handleSubmit(formData) {
-    const result = register(formData);
+  async function handleSubmit(formData) {
+    setError('');
+    setLoading(true);
+    const result = await register(formData);
+    setLoading(false);
     if (result.success) {
-      navigate('/dashboard');
+      navigate(`/verify?email=${encodeURIComponent(formData.email)}`);
     } else {
       setError(result.error);
     }
@@ -21,7 +25,7 @@ export default function RegisterPage() {
       <div className="auth-card glass-card">
         <h1>Create Account</h1>
         <p>Start your free overdraft audit today</p>
-        <RegistrationForm onSubmit={handleSubmit} error={error} />
+        <RegistrationForm onSubmit={handleSubmit} error={error} loading={loading} />
         <div className="auth-link">
           Already have an account? <Link to="/login">Login</Link>
         </div>

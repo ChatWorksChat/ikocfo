@@ -30,7 +30,8 @@ export default function CalculatorPage() {
 
   async function handleFileSelected(file) {
     setError('');
-    setLoading(true);
+    const isPDF = file.name.toLowerCase().endsWith('.pdf');
+    setLoading(isPDF ? 'pdf' : true);
     try {
       const data = await parseFile(file);
       if (data.rowCount > maxRows) {
@@ -128,7 +129,11 @@ export default function CalculatorPage() {
 
       {error && <div className="alert alert-error">{error}</div>}
 
-      {loading && <LoadingSpinner text="Processing your statement..." />}
+      {loading && (
+        <LoadingSpinner
+          text={loading === 'pdf' ? 'Converting PDF to spreadsheet...' : 'Processing your statement...'}
+        />
+      )}
 
       {!loading && (
         <>

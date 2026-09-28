@@ -63,6 +63,15 @@ export default function Header() {
               >
                 Calculator
               </NavLink>
+              {user.role === 'admin' && (
+                <NavLink
+                  to="/admin"
+                  className={({ isActive }) => isActive ? 'nav-active' : ''}
+                  onClick={() => setMenuOpen(false)}
+                >
+                  Admin
+                </NavLink>
+              )}
               <div className="header-auth">
                 <span className="header-user">{user.firstName || user.email}</span>
                 <button className="btn btn-sm btn-outline" onClick={handleLogout}>

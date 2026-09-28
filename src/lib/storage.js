@@ -1,4 +1,5 @@
-// localStorage wrappers for users, history, and usage tracking
+// localStorage wrappers for session, history, and usage tracking
+// User CRUD now handled by backend API
 
 import { STORAGE_KEYS } from './constants.js';
 
@@ -13,37 +14,6 @@ function getJSON(key) {
 
 function setJSON(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
-}
-
-// --- Users ---
-
-export function getUsers() {
-  return getJSON(STORAGE_KEYS.users) || [];
-}
-
-export function saveUsers(users) {
-  setJSON(STORAGE_KEYS.users, users);
-}
-
-export function findUserByEmail(email) {
-  return getUsers().find(u => u.email.toLowerCase() === email.toLowerCase());
-}
-
-export function addUser(user) {
-  const users = getUsers();
-  users.push(user);
-  saveUsers(users);
-}
-
-export function updateUser(email, updates) {
-  const users = getUsers();
-  const idx = users.findIndex(u => u.email.toLowerCase() === email.toLowerCase());
-  if (idx !== -1) {
-    users[idx] = { ...users[idx], ...updates };
-    saveUsers(users);
-    return users[idx];
-  }
-  return null;
 }
 
 // --- Session ---

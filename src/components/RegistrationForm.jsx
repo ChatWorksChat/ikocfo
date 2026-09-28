@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-export default function RegistrationForm({ onSubmit, error }) {
+export default function RegistrationForm({ onSubmit, error, loading }) {
   const [accountType, setAccountType] = useState('individual');
   const [form, setForm] = useState({
     firstName: '',
@@ -193,8 +193,8 @@ export default function RegistrationForm({ onSubmit, error }) {
         </div>
       )}
 
-      <button type="submit" className="btn btn-primary btn-lg">
-        Create Account
+      <button type="submit" className="btn btn-primary btn-lg" disabled={loading}>
+        {loading ? 'Creating Account...' : 'Create Account'}
       </button>
     </form>
   );
