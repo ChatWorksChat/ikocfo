@@ -285,3 +285,48 @@ export async function sendCredentials(email) {
     return { success: false, error: 'Unable to connect to server.' };
   }
 }
+
+export async function inviteUser({ email, firstName, lastName, accountType, companyName, role }) {
+  try {
+    const data = await apiCall('/admin/invite', { email, firstName, lastName, accountType, companyName, role });
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, message: data.message, inviteUrl: data.inviteUrl };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
+export async function editUser(email, fields) {
+  try {
+    const data = await apiPut(`/admin/users/${encodeURIComponent(email)}/edit`, fields);
+    if (data.error) return { success: false, error: data.error };
+    return { success: true };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
+export async function deleteUser(email) {
+  try {
+    const res = await fetch(`${API_URL}/admin/users/${encodeURIComponent(email)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await res.json();
+    if (data.error) return { success: false, error: data.error };
+    return { success: true };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
+export async function acceptInvite(token, password) {
+  try {
+    const data = await apiCall('/auth/accept-invite', { token, password });
+    if (data.error) return { success: false, error: data.error };
+    setSession(data.user);
+    return { success: true, user: data.user, mfaSetupRequired: !!data.mfaSetupRequired };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}

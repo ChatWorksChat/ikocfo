@@ -65,7 +65,7 @@ def response(status_code, body):
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Headers': 'Content-Type',
-            'Access-Control-Allow-Methods': 'GET,POST,PUT,OPTIONS',
+            'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
         },
         'body': json.dumps(body, default=str),
     }
@@ -150,7 +150,7 @@ Your IKO CFO admin account has been created.
 Email: {email}
 Password: {password}
 
-Please log in at https://ikocfo.com/login and change your password.
+Please log in at https://main.d3e8omyd97oi7s.amplifyapp.com/login and change your password.
 
 — IKO CFO Team
 """
@@ -162,7 +162,7 @@ Please log in at https://ikocfo.com/login and change your password.
     <p><strong>Email:</strong> {email}</p>
     <p><strong>Password:</strong> {password}</p>
   </div>
-  <p>Please <a href="https://ikocfo.com/login" style="color: #8458a3;">log in</a> and change your password.</p>
+  <p>Please <a href="https://main.d3e8omyd97oi7s.amplifyapp.com/login" style="color: #8458a3;">log in</a> and change your password.</p>
 </div>
 """
     return send_email(email, subject, body, html)
@@ -1103,6 +1103,261 @@ def handle_webauthn_remove(body):
     return response(200, {'removed': True})
 
 
+# --- Invite Token Helpers ---
+
+INVITE_TOKEN_SECRET = (PASSWORD_SALT + '-invite-token').encode('utf-8')
+
+
+def create_invite_token(email):
+    """Create an HMAC-signed invite token valid for 7 days."""
+    expiry = int(time.time()) + 604800  # 7 days
+    payload = f'{email}:{expiry}'
+    sig = hmac.new(INVITE_TOKEN_SECRET, payload.encode('utf-8'), hashlib.sha256).hexdigest()
+    return f'{payload}:{sig}'
+
+
+def verify_invite_token(token):
+    """Verify invite token, return email if valid, None otherwise."""
+    if not token:
+        return None
+    parts = token.rsplit(':', 2)
+    if len(parts) != 3:
+        return None
+    email, expiry_str, sig = parts
+    try:
+        if int(time.time()) > int(expiry_str):
+            return None
+    except ValueError:
+        return None
+    expected = hmac.new(INVITE_TOKEN_SECRET, f'{email}:{expiry_str}'.encode('utf-8'), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return None
+    return email
+
+
+APP_URL = os.environ.get('APP_URL', 'https://main.d3e8omyd97oi7s.amplifyapp.com')
+
+
+def send_invite_email(email, first_name, invite_token):
+    """Send invitation email with signup link."""
+    subject = 'IKO CFO — You\'ve Been Invited!'
+    name = first_name or 'there'
+    invite_url = f'{APP_URL}/invite/accept?token={invite_token}'
+    body = f"""Hi {name},
+
+You've been invited to join IKO CFO.
+
+Click the link below to set up your account:
+{invite_url}
+
+This invitation expires in 7 days.
+
+— IKO CFO Team
+"""
+    html = f"""
+<div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px;">
+  <h2 style="color: #8458a3;">IKO CFO</h2>
+  <p>Hi {name},</p>
+  <p>You've been invited to join <strong>IKO CFO</strong>.</p>
+  <p>Click the button below to set up your account, create your password, and enable two-factor authentication.</p>
+  <div style="text-align: center; margin: 24px 0;">
+    <a href="{invite_url}" style="display: inline-block; padding: 14px 32px; background: #8458a3; color: #fff; text-decoration: none; border-radius: 6px; font-weight: bold;">
+      Accept Invitation
+    </a>
+  </div>
+  <p style="color: #666; font-size: 13px;">This invitation expires in 7 days.</p>
+  <p style="color: #999; font-size: 12px;">— IKO CFO Team</p>
+</div>
+"""
+    return send_email(email, subject, body, html)
+
+
+# --- Admin CRUD Handlers ---
+
+def handle_admin_invite(body):
+    """Create an invited user and send invitation email."""
+    email = (body.get('email') or '').lower().strip()
+    first_name = body.get('firstName', '')
+    last_name = body.get('lastName', '')
+    account_type = body.get('accountType', 'individual')
+    company_name = body.get('companyName', '')
+    role = body.get('role', 'user')
+
+    if not email:
+        return response(400, {'error': 'Email is required.'})
+
+    # Check if user already exists
+    try:
+        existing = table.get_item(Key={'email': email})
+        if 'Item' in existing:
+            return response(409, {'error': 'An account with this email already exists.'})
+    except ClientError:
+        pass
+
+    if role not in ('user', 'admin'):
+        role = 'user'
+
+    # Create user record with status 'invited' (no password yet)
+    item = {
+        'email': email,
+        'firstName': first_name,
+        'lastName': last_name,
+        'accountType': account_type,
+        'companyName': company_name,
+        'companyAddress': '',
+        'position': '',
+        'plan': 'free',
+        'verified': False,
+        'role': role,
+        'status': 'invited',
+        'createdAt': now_iso(),
+        'lastLoginAt': None,
+    }
+    table.put_item(Item=item)
+
+    # Generate invite token and send email
+    invite_token = create_invite_token(email)
+    sent = send_invite_email(email, first_name, invite_token)
+
+    if sent:
+        return response(201, {'message': f'Invitation sent to {email}.', 'email': email})
+    else:
+        return response(201, {
+            'message': f'User created but email failed to send (SES). Share the invitation link manually.',
+            'email': email,
+            'inviteUrl': f'{APP_URL}/invite/accept?token={invite_token}',
+        })
+
+
+def handle_accept_invite(body):
+    """Accept an invitation: validate token, set password, activate account."""
+    token = body.get('token', '')
+    password = body.get('password', '')
+
+    if not token:
+        return response(400, {'error': 'Invitation token is required.'})
+
+    email = verify_invite_token(token)
+    if not email:
+        return response(401, {'error': 'Invalid or expired invitation link. Please contact your administrator.'})
+
+    if not password:
+        return response(400, {'error': 'Password is required.'})
+
+    # Password strength requirements: min 8 chars, at least 1 uppercase, 1 lowercase, 1 digit
+    if len(password) < 8:
+        return response(400, {'error': 'Password must be at least 8 characters.'})
+    if not any(c.isupper() for c in password):
+        return response(400, {'error': 'Password must contain at least one uppercase letter.'})
+    if not any(c.islower() for c in password):
+        return response(400, {'error': 'Password must contain at least one lowercase letter.'})
+    if not any(c.isdigit() for c in password):
+        return response(400, {'error': 'Password must contain at least one number.'})
+
+    try:
+        result = table.get_item(Key={'email': email})
+    except ClientError:
+        return response(500, {'error': 'Database error.'})
+
+    if 'Item' not in result:
+        return response(404, {'error': 'User not found.'})
+
+    user = result['Item']
+
+    if user.get('status') != 'invited':
+        return response(400, {'error': 'This invitation has already been accepted.'})
+
+    # Set password, mark verified and active
+    table.update_item(
+        Key={'email': email},
+        UpdateExpression='SET password_hash = :p, verified = :v, #s = :s',
+        ExpressionAttributeNames={'#s': 'status'},
+        ExpressionAttributeValues={
+            ':p': hash_password(password),
+            ':v': True,
+            ':s': 'active',
+        },
+    )
+
+    # Return user data so frontend can set session
+    user['verified'] = True
+    user['status'] = 'active'
+    user_data = build_user_data(user)
+
+    return response(200, {'user': user_data, 'mfaSetupRequired': True})
+
+
+def handle_admin_edit_user(email, body):
+    """Edit user fields (firstName, lastName, role, plan, accountType, companyName)."""
+    allowed_fields = {
+        'firstName': 'firstName',
+        'lastName': 'lastName',
+        'role': 'role',
+        'plan': 'plan',
+        'accountType': 'accountType',
+        'companyName': 'companyName',
+    }
+
+    update_parts = []
+    expr_names = {}
+    expr_values = {}
+
+    for key, attr in allowed_fields.items():
+        if key in body:
+            placeholder = f':v_{key}'
+            # 'role' and 'status' are reserved words in DynamoDB
+            if attr in ('role', 'status', 'plan'):
+                alias = f'#a_{attr}'
+                expr_names[alias] = attr
+                update_parts.append(f'{alias} = {placeholder}')
+            else:
+                update_parts.append(f'{attr} = {placeholder}')
+            expr_values[placeholder] = body[key]
+
+    if not update_parts:
+        return response(400, {'error': 'No fields to update.'})
+
+    # Validate role if provided
+    if 'role' in body and body['role'] not in ('user', 'admin'):
+        return response(400, {'error': 'Role must be "user" or "admin".'})
+
+    try:
+        result = table.get_item(Key={'email': email})
+        if 'Item' not in result:
+            return response(404, {'error': 'User not found.'})
+    except ClientError:
+        return response(500, {'error': 'Database error.'})
+
+    update_expr = 'SET ' + ', '.join(update_parts)
+
+    kwargs = {
+        'Key': {'email': email},
+        'UpdateExpression': update_expr,
+        'ExpressionAttributeValues': expr_values,
+    }
+    if expr_names:
+        kwargs['ExpressionAttributeNames'] = expr_names
+
+    try:
+        table.update_item(**kwargs)
+        return response(200, {'message': f'User {email} updated.'})
+    except ClientError as e:
+        return response(500, {'error': str(e)})
+
+
+def handle_admin_delete_user(email):
+    """Delete a user from DynamoDB."""
+    try:
+        result = table.get_item(Key={'email': email})
+        if 'Item' not in result:
+            return response(404, {'error': 'User not found.'})
+
+        table.delete_item(Key={'email': email})
+        return response(200, {'message': f'User {email} has been deleted.'})
+    except ClientError as e:
+        return response(500, {'error': str(e)})
+
+
 # --- MFA Reminder Email ---
 
 def send_mfa_reminder_email(email, first_name):
@@ -1119,7 +1374,7 @@ You can now protect your account with:
 
 Set up 2FA now by logging in and visiting your Security Settings.
 
-Log in: https://ikocfo.com/login
+Log in: https://main.d3e8omyd97oi7s.amplifyapp.com/login
 
 After logging in, you'll be prompted to set up 2FA, or you can go to Settings > Security at any time.
 
@@ -1138,7 +1393,7 @@ After logging in, you'll be prompted to set up 2FA, or you can go to Settings > 
     </ul>
   </div>
   <div style="text-align: center; margin: 24px 0;">
-    <a href="https://ikocfo.com/login" style="display: inline-block; padding: 14px 32px; background: #8458a3; color: #fff; text-decoration: none; border-radius: 6px; font-weight: bold;">
+    <a href="https://main.d3e8omyd97oi7s.amplifyapp.com/login" style="display: inline-block; padding: 14px 32px; background: #8458a3; color: #fff; text-decoration: none; border-radius: 6px; font-weight: bold;">
       Set Up 2FA Now
     </a>
   </div>
@@ -1265,6 +1520,24 @@ def lambda_handler(event, context):
 
     if method == 'POST' and path == '/admin/send-mfa-reminders':
         return handle_send_mfa_reminders(body)
+
+    if method == 'POST' and path == '/admin/invite':
+        return handle_admin_invite(body)
+
+    if method == 'POST' and path == '/auth/accept-invite':
+        return handle_accept_invite(body)
+
+    # /admin/users/{email}/edit
+    if method == 'PUT' and '/admin/users/' in path and path.endswith('/edit'):
+        parts = path.split('/')
+        email = unquote(parts[-2])
+        return handle_admin_edit_user(email, body)
+
+    # DELETE /admin/users/{email}
+    if method == 'DELETE' and '/admin/users/' in path and not path.endswith('/status') and not path.endswith('/role') and not path.endswith('/edit'):
+        parts = path.split('/')
+        email = unquote(parts[-1])
+        return handle_admin_delete_user(email)
 
     # /admin/users/{email}/status
     if method == 'PUT' and '/admin/users/' in path and path.endswith('/status'):
