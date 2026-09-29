@@ -26,8 +26,20 @@ export default function LoginPage() {
     const result = await login(email, password);
     setLoading(false);
 
+    if (result.mfaRequired) {
+      navigate('/login/mfa', {
+        state: { mfaToken: result.mfaToken, methods: result.methods },
+        replace: true,
+      });
+      return;
+    }
+
     if (result.success) {
-      navigate('/dashboard');
+      if (result.mfaSetupRequired) {
+        navigate('/mfa/setup', { replace: true });
+      } else {
+        navigate('/dashboard');
+      }
     } else {
       setError(result.error);
     }

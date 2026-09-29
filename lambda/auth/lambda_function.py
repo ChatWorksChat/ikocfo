@@ -1,6 +1,7 @@
 """
 IKO CFO Auth & Admin API — Lambda handler
 Endpoints: /auth/register, /auth/verify, /auth/login, /auth/resend
+           /auth/mfa/* (TOTP setup, verify, disable, recovery codes)
            /admin/users, /admin/users/{email}/status, /admin/users/{email}/role
            /admin/stats, /admin/send-credentials
 """
@@ -11,6 +12,9 @@ import hmac
 import os
 import random
 import string
+import struct
+import base64
+import secrets
 import time
 from datetime import datetime, timezone
 from urllib.parse import unquote
@@ -141,6 +145,90 @@ Please log in at https://ikocfo.com/login and change your password.
     return send_email(email, subject, body, html)
 
 
+# --- TOTP Helpers (RFC 6238 / RFC 4226) ---
+
+def generate_totp_secret():
+    """Generate a random 20-byte secret, return as base32 string."""
+    return base64.b32encode(secrets.token_bytes(20)).decode('utf-8')
+
+
+def compute_totp(secret_b32, time_offset=0, digits=6, period=30):
+    """Compute a TOTP code for the current time + offset periods."""
+    key = base64.b32decode(secret_b32)
+    counter = (int(time.time()) // period) + time_offset
+    counter_bytes = struct.pack('>Q', counter)
+    h = hmac.new(key, counter_bytes, hashlib.sha1).digest()
+    offset = h[-1] & 0x0f
+    truncated = struct.unpack('>I', h[offset:offset + 4])[0] & 0x7fffffff
+    return str(truncated % (10 ** digits)).zfill(digits)
+
+
+def verify_totp_code(secret_b32, code, window=1):
+    """Verify a TOTP code, allowing ±window time steps."""
+    code = code.strip()
+    if len(code) != 6 or not code.isdigit():
+        return False
+    for offset in range(-window, window + 1):
+        if hmac.compare_digest(compute_totp(secret_b32, offset), code):
+            return True
+    return False
+
+
+def generate_otpauth_uri(email, secret):
+    """Generate otpauth:// URI for QR code scanning."""
+    issuer = 'IKO%20CFO'
+    return f'otpauth://totp/{issuer}:{email}?secret={secret}&issuer={issuer}&digits=6&period=30'
+
+
+# --- Recovery Code Helpers ---
+
+def generate_recovery_codes(count=10):
+    """Generate recovery codes in XXXX-XXXX format."""
+    codes = []
+    for _ in range(count):
+        part1 = secrets.token_hex(2).upper()
+        part2 = secrets.token_hex(2).upper()
+        codes.append(f'{part1}-{part2}')
+    return codes
+
+
+def hash_recovery_code(code):
+    """SHA-256 hash of a recovery code."""
+    return hashlib.sha256(code.upper().strip().encode('utf-8')).hexdigest()
+
+
+# --- MFA Token Helpers ---
+
+MFA_TOKEN_SECRET = (PASSWORD_SALT + '-mfa-token').encode('utf-8')
+
+
+def create_mfa_token(email):
+    """Create a short-lived HMAC-signed token for MFA verification (5 min)."""
+    expiry = int(time.time()) + 300
+    payload = f'{email}:{expiry}'
+    sig = hmac.new(MFA_TOKEN_SECRET, payload.encode('utf-8'), hashlib.sha256).hexdigest()
+    return f'{payload}:{sig}'
+
+
+def verify_mfa_token(token):
+    """Verify MFA token, return email if valid, None otherwise."""
+    if not token:
+        return None
+    parts = token.rsplit(':', 2)
+    if len(parts) != 3:
+        return None
+    email, expiry_str, sig = parts
+    try:
+        if int(time.time()) > int(expiry_str):
+            return None
+    except ValueError:
+        return None
+    expected = hmac.new(MFA_TOKEN_SECRET, f'{email}:{expiry_str}'.encode('utf-8'), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return None
+    return email
+
+
 # --- Auth Handlers ---
 
 def handle_register(body):
@@ -230,6 +318,25 @@ def handle_verify(body):
     return response(200, {'message': 'Email verified successfully.'})
 
 
+def build_user_data(user):
+    """Build safe user data dict (no sensitive fields)."""
+    return {
+        'email': user['email'],
+        'firstName': user.get('firstName', ''),
+        'lastName': user.get('lastName', ''),
+        'accountType': user.get('accountType', 'individual'),
+        'companyName': user.get('companyName', ''),
+        'companyAddress': user.get('companyAddress', ''),
+        'position': user.get('position', ''),
+        'plan': user.get('plan', 'free'),
+        'verified': True,
+        'role': user.get('role', 'user'),
+        'status': user.get('status', 'active'),
+        'createdAt': user.get('createdAt', ''),
+        'mfaEnabled': bool(user.get('mfaTotpEnabled')),
+    }
+
+
 def handle_login(body):
     email = (body.get('email') or '').lower().strip()
     password = body.get('password', '')
@@ -256,6 +363,15 @@ def handle_login(body):
     if user.get('status') == 'disabled':
         return response(403, {'error': 'Your account has been disabled. Please contact support.'})
 
+    # Check if MFA is enabled
+    if user.get('mfaTotpEnabled'):
+        mfa_token = create_mfa_token(email)
+        return response(200, {
+            'mfaRequired': True,
+            'mfaToken': mfa_token,
+            'methods': ['totp'],
+        })
+
     # Update last login
     table.update_item(
         Key={'email': email},
@@ -263,23 +379,24 @@ def handle_login(body):
         ExpressionAttributeValues={':t': now_iso()},
     )
 
-    # Return user object (without sensitive fields)
-    user_data = {
-        'email': user['email'],
-        'firstName': user.get('firstName', ''),
-        'lastName': user.get('lastName', ''),
-        'accountType': user.get('accountType', 'individual'),
-        'companyName': user.get('companyName', ''),
-        'companyAddress': user.get('companyAddress', ''),
-        'position': user.get('position', ''),
-        'plan': user.get('plan', 'free'),
-        'verified': True,
-        'role': user.get('role', 'user'),
-        'status': user.get('status', 'active'),
-        'createdAt': user.get('createdAt', ''),
-    }
+    user_data = build_user_data(user)
 
-    return response(200, {'user': user_data})
+    # Prompt MFA setup for users who haven't been prompted yet
+    mfa_setup_required = (
+        not user.get('mfaTotpEnabled')
+        and not user.get('mfaPromptedAt')
+    )
+    if mfa_setup_required:
+        table.update_item(
+            Key={'email': email},
+            UpdateExpression='SET mfaPromptedAt = :t',
+            ExpressionAttributeValues={':t': now_iso()},
+        )
+
+    resp = {'user': user_data}
+    if mfa_setup_required:
+        resp['mfaSetupRequired'] = True
+    return response(200, resp)
 
 
 def handle_resend(body):
@@ -445,6 +562,231 @@ def handle_send_credentials(body):
         return response(500, {'error': 'Failed to send email. Check SES configuration.'})
 
 
+# --- MFA Handlers ---
+
+def handle_mfa_totp_setup(body):
+    """Generate TOTP secret and otpauth URI for QR code."""
+    email = (body.get('email') or '').lower().strip()
+    if not email:
+        return response(400, {'error': 'Email is required.'})
+
+    try:
+        result = table.get_item(Key={'email': email})
+    except ClientError:
+        return response(500, {'error': 'Database error.'})
+
+    if 'Item' not in result:
+        return response(404, {'error': 'User not found.'})
+
+    user = result['Item']
+    if user.get('mfaTotpEnabled'):
+        return response(400, {'error': 'TOTP is already enabled.'})
+
+    secret = generate_totp_secret()
+    otpauth_uri = generate_otpauth_uri(email, secret)
+
+    # Store pending secret (not yet enabled)
+    table.update_item(
+        Key={'email': email},
+        UpdateExpression='SET mfaTotpSecret = :s',
+        ExpressionAttributeValues={':s': secret},
+    )
+
+    return response(200, {
+        'secret': secret,
+        'otpauthUri': otpauth_uri,
+    })
+
+
+def handle_mfa_totp_verify_setup(body):
+    """Verify TOTP code during setup, enable TOTP, return recovery codes."""
+    email = (body.get('email') or '').lower().strip()
+    code = (body.get('code') or '').strip()
+
+    if not email or not code:
+        return response(400, {'error': 'Email and code are required.'})
+
+    try:
+        result = table.get_item(Key={'email': email})
+    except ClientError:
+        return response(500, {'error': 'Database error.'})
+
+    if 'Item' not in result:
+        return response(404, {'error': 'User not found.'})
+
+    user = result['Item']
+    secret = user.get('mfaTotpSecret')
+    if not secret:
+        return response(400, {'error': 'No TOTP setup in progress. Start setup first.'})
+
+    if user.get('mfaTotpEnabled'):
+        return response(400, {'error': 'TOTP is already enabled.'})
+
+    if not verify_totp_code(secret, code):
+        return response(400, {'error': 'Invalid code. Please try again.'})
+
+    # Generate recovery codes
+    recovery_codes = generate_recovery_codes()
+    hashed_codes = [hash_recovery_code(c) for c in recovery_codes]
+
+    table.update_item(
+        Key={'email': email},
+        UpdateExpression='SET mfaTotpEnabled = :e, mfaTotpVerifiedAt = :t, mfaRecoveryCodes = :rc, mfaRecoveryCodesGeneratedAt = :rg',
+        ExpressionAttributeValues={
+            ':e': True,
+            ':t': now_iso(),
+            ':rc': hashed_codes,
+            ':rg': now_iso(),
+        },
+    )
+
+    return response(200, {
+        'enabled': True,
+        'recoveryCodes': recovery_codes,
+    })
+
+
+def handle_mfa_totp_disable(body):
+    """Disable TOTP (requires password confirmation)."""
+    email = (body.get('email') or '').lower().strip()
+    password = body.get('password', '')
+
+    if not email or not password:
+        return response(400, {'error': 'Email and password are required.'})
+
+    try:
+        result = table.get_item(Key={'email': email})
+    except ClientError:
+        return response(500, {'error': 'Database error.'})
+
+    if 'Item' not in result:
+        return response(404, {'error': 'User not found.'})
+
+    user = result['Item']
+    if user.get('password_hash') != hash_password(password):
+        return response(401, {'error': 'Incorrect password.'})
+
+    table.update_item(
+        Key={'email': email},
+        UpdateExpression='REMOVE mfaTotpSecret, mfaTotpEnabled, mfaTotpVerifiedAt, mfaRecoveryCodes, mfaRecoveryCodesGeneratedAt',
+    )
+
+    return response(200, {'disabled': True})
+
+
+def handle_mfa_verify(body):
+    """Verify TOTP or recovery code during login (mfaToken required)."""
+    mfa_token = body.get('mfaToken', '')
+    code = (body.get('code') or '').strip()
+    method = body.get('method', 'totp')
+
+    if not mfa_token:
+        return response(400, {'error': 'MFA token is required.'})
+
+    email = verify_mfa_token(mfa_token)
+    if not email:
+        return response(401, {'error': 'MFA session expired. Please log in again.'})
+
+    if not code:
+        return response(400, {'error': 'Verification code is required.'})
+
+    try:
+        result = table.get_item(Key={'email': email})
+    except ClientError:
+        return response(500, {'error': 'Database error.'})
+
+    if 'Item' not in result:
+        return response(404, {'error': 'User not found.'})
+
+    user = result['Item']
+
+    if method == 'recovery':
+        # Verify recovery code
+        hashed = hash_recovery_code(code)
+        stored_codes = user.get('mfaRecoveryCodes', [])
+        if hashed not in stored_codes:
+            return response(400, {'error': 'Invalid recovery code.'})
+
+        # Remove used code
+        updated_codes = [c for c in stored_codes if c != hashed]
+        table.update_item(
+            Key={'email': email},
+            UpdateExpression='SET mfaRecoveryCodes = :rc, lastLoginAt = :t',
+            ExpressionAttributeValues={':rc': updated_codes, ':t': now_iso()},
+        )
+    else:
+        # Verify TOTP code
+        secret = user.get('mfaTotpSecret')
+        if not secret or not verify_totp_code(secret, code):
+            return response(400, {'error': 'Invalid verification code.'})
+
+        table.update_item(
+            Key={'email': email},
+            UpdateExpression='SET lastLoginAt = :t',
+            ExpressionAttributeValues={':t': now_iso()},
+        )
+
+    return response(200, {'user': build_user_data(user)})
+
+
+def handle_mfa_status(body):
+    """Return MFA status for a user."""
+    email = (body.get('email') or '').lower().strip()
+    if not email:
+        return response(400, {'error': 'Email is required.'})
+
+    try:
+        result = table.get_item(Key={'email': email})
+    except ClientError:
+        return response(500, {'error': 'Database error.'})
+
+    if 'Item' not in result:
+        return response(404, {'error': 'User not found.'})
+
+    user = result['Item']
+    recovery_count = len(user.get('mfaRecoveryCodes', []))
+
+    return response(200, {
+        'totpEnabled': bool(user.get('mfaTotpEnabled')),
+        'recoveryCodesRemaining': recovery_count,
+    })
+
+
+def handle_mfa_recovery_regenerate(body):
+    """Regenerate recovery codes (requires password)."""
+    email = (body.get('email') or '').lower().strip()
+    password = body.get('password', '')
+
+    if not email or not password:
+        return response(400, {'error': 'Email and password are required.'})
+
+    try:
+        result = table.get_item(Key={'email': email})
+    except ClientError:
+        return response(500, {'error': 'Database error.'})
+
+    if 'Item' not in result:
+        return response(404, {'error': 'User not found.'})
+
+    user = result['Item']
+    if user.get('password_hash') != hash_password(password):
+        return response(401, {'error': 'Incorrect password.'})
+
+    if not user.get('mfaTotpEnabled'):
+        return response(400, {'error': 'MFA is not enabled.'})
+
+    recovery_codes = generate_recovery_codes()
+    hashed_codes = [hash_recovery_code(c) for c in recovery_codes]
+
+    table.update_item(
+        Key={'email': email},
+        UpdateExpression='SET mfaRecoveryCodes = :rc, mfaRecoveryCodesGeneratedAt = :t',
+        ExpressionAttributeValues={':rc': hashed_codes, ':t': now_iso()},
+    )
+
+    return response(200, {'recoveryCodes': recovery_codes})
+
+
 # --- Main Handler ---
 
 def lambda_handler(event, context):
@@ -474,6 +816,25 @@ def lambda_handler(event, context):
 
     if method == 'POST' and path == '/auth/resend':
         return handle_resend(body)
+
+    # --- MFA routes ---
+    if method == 'POST' and path == '/auth/mfa/totp/setup':
+        return handle_mfa_totp_setup(body)
+
+    if method == 'POST' and path == '/auth/mfa/totp/verify-setup':
+        return handle_mfa_totp_verify_setup(body)
+
+    if method == 'POST' and path == '/auth/mfa/totp/disable':
+        return handle_mfa_totp_disable(body)
+
+    if method == 'POST' and path == '/auth/mfa/verify':
+        return handle_mfa_verify(body)
+
+    if method == 'POST' and path == '/auth/mfa/status':
+        return handle_mfa_status(body)
+
+    if method == 'POST' and path == '/auth/mfa/recovery-codes/regenerate':
+        return handle_mfa_recovery_regenerate(body)
 
     # --- Admin routes ---
     if method == 'GET' and path == '/admin/users':

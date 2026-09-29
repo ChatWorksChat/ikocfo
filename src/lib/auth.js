@@ -74,8 +74,80 @@ export async function login(email, password) {
     if (data.error) {
       return { success: false, error: data.error };
     }
+    // MFA required — don't set session yet
+    if (data.mfaRequired) {
+      return { success: false, mfaRequired: true, mfaToken: data.mfaToken, methods: data.methods };
+    }
+    setSession(data.user);
+    return { success: true, user: data.user, mfaSetupRequired: !!data.mfaSetupRequired };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+export async function verifyMfa(mfaToken, code, method = 'totp') {
+  try {
+    const data = await apiCall('/auth/mfa/verify', { mfaToken, code, method });
+    if (data.error) {
+      return { success: false, error: data.error };
+    }
     setSession(data.user);
     return { success: true, user: data.user };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+export async function setupTotp(email) {
+  try {
+    const data = await apiCall('/auth/mfa/totp/setup', { email });
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, secret: data.secret, otpauthUri: data.otpauthUri };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+export async function verifyTotpSetup(email, code) {
+  try {
+    const data = await apiCall('/auth/mfa/totp/verify-setup', { email, code });
+    if (data.error) return { success: false, error: data.error };
+    // Update session with mfaEnabled
+    const session = getSession();
+    if (session) setSession({ ...session, mfaEnabled: true });
+    return { success: true, recoveryCodes: data.recoveryCodes };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+export async function disableTotp(email, password) {
+  try {
+    const data = await apiCall('/auth/mfa/totp/disable', { email, password });
+    if (data.error) return { success: false, error: data.error };
+    const session = getSession();
+    if (session) setSession({ ...session, mfaEnabled: false });
+    return { success: true };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+export async function getMfaStatus(email) {
+  try {
+    const data = await apiCall('/auth/mfa/status', { email });
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, totpEnabled: data.totpEnabled, recoveryCodesRemaining: data.recoveryCodesRemaining };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+export async function regenerateRecoveryCodes(email, password) {
+  try {
+    const data = await apiCall('/auth/mfa/recovery-codes/regenerate', { email, password });
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, recoveryCodes: data.recoveryCodes };
   } catch {
     return { success: false, error: 'Unable to connect to server. Please try again.' };
   }

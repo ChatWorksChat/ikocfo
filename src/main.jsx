@@ -6,6 +6,9 @@ import App from './App.jsx';
 import LandingPage from './pages/LandingPage.jsx';
 import RegisterPage from './pages/RegisterPage.jsx';
 import LoginPage from './pages/LoginPage.jsx';
+import MfaChallengePage from './pages/MfaChallengePage.jsx';
+import MfaSetupPage from './pages/MfaSetupPage.jsx';
+import MfaSettingsPage from './pages/MfaSettingsPage.jsx';
 import VerifyEmailPage from './pages/VerifyEmailPage.jsx';
 import DashboardPage from './pages/DashboardPage.jsx';
 import CalculatorPage from './pages/CalculatorPage.jsx';
@@ -23,6 +26,9 @@ createRoot(document.getElementById('root')).render(
           <Route index element={<LandingPage />} />
           <Route path="register" element={<RegisterPage />} />
           <Route path="login" element={<LoginPage />} />
+          <Route path="login/mfa" element={<MfaChallengePage />} />
+          <Route path="mfa/setup" element={<ProtectedRoute><MfaSetupPage /></ProtectedRoute>} />
+          <Route path="settings/security" element={<ProtectedRoute><MfaSettingsPage /></ProtectedRoute>} />
           <Route path="verify" element={<VerifyEmailPage />} />
           <Route path="pricing" element={<PricingPage />} />
           <Route
