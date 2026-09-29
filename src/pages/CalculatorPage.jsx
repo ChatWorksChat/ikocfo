@@ -61,7 +61,9 @@ export default function CalculatorPage() {
     // Use setTimeout to allow the spinner to render
     setTimeout(() => {
       try {
-        const transactions = applyMapping(parsedData.rows, settings.columnMapping);
+        // Use the resolved rows from the preview step (excludes preamble)
+        const dataRows = settings.resolvedRows || parsedData.rows || [];
+        const transactions = applyMapping(dataRows, settings.columnMapping);
         const calcResults = runCalculation({
           transactions,
           currency: settings.currency,
@@ -84,7 +86,7 @@ export default function CalculatorPage() {
           fileName: parsedData.fileName,
           effectiveAPR: calcResults.effectiveAPR,
           currency: settings.currency,
-          transactionCount: parsedData.rowCount,
+          transactionCount: dataRows.length,
         });
 
         setStep(3);

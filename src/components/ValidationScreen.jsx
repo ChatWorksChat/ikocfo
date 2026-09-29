@@ -5,8 +5,10 @@ import { parseDate } from '../lib/formatters.js';
 export default function ValidationScreen({ parsedData, settings, onConfirm, onBack }) {
   const [agreed, setAgreed] = useState(false);
 
-  const { rows, fileName } = parsedData;
-  const { nominalRate, overdraftLimit, currency, columnMapping } = settings;
+  const { fileName } = parsedData;
+  const { nominalRate, overdraftLimit, currency, columnMapping, resolvedRows } = settings;
+  // Use resolved rows (preamble excluded) if available, fall back to parsedData.rows
+  const rows = resolvedRows || parsedData.rows || [];
 
   // Find date range
   const dateCol = Object.entries(columnMapping).find(([, t]) => t === 'date')?.[0];

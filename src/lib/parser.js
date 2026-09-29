@@ -10,6 +10,58 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url,
 ).toString();
 
+// Patterns that indicate a row is a column header (not preamble)
+const HEADER_PATTERNS = [
+  /^date$/i, /posting\s*date/i, /trans(action)?\s*date/i, /^txn\s*date$/i,
+  /^value$/i, /value\s*date/i,
+  /^desc/i, /narrative/i, /particulars/i, /details/i, /^narration$/i,
+  /^debit/i, /^dr$/i, /withdrawal/i,
+  /^credit$/i, /^cr$/i, /deposit/i,
+  /balance/i, /running\s*bal/i, /^bal$/i,
+  /interest/i, /^fee/i, /^charge/i, /reference/i, /^amount$/i,
+];
+
+/**
+ * Score a row to determine how likely it is to be a column header row.
+ * Returns the count of cells matching known header patterns.
+ */
+function scoreHeaderRow(cells) {
+  let matches = 0;
+  for (const cell of cells) {
+    const text = String(cell || '').trim();
+    if (!text) continue;
+    for (const pattern of HEADER_PATTERNS) {
+      if (pattern.test(text)) {
+        matches++;
+        break;
+      }
+    }
+  }
+  return matches;
+}
+
+/**
+ * Auto-detect the header row index from raw rows.
+ * Finds the row with the highest header-pattern match score (minimum 2 matches).
+ */
+export function detectHeaderRow(rawRows) {
+  let bestIdx = 0;
+  let bestScore = 0;
+
+  // Only search the first 20 rows for header candidates
+  const searchLimit = Math.min(rawRows.length, 20);
+
+  for (let i = 0; i < searchLimit; i++) {
+    const score = scoreHeaderRow(rawRows[i]);
+    if (score > bestScore) {
+      bestScore = score;
+      bestIdx = i;
+    }
+  }
+
+  return bestIdx;
+}
+
 export function parseFile(file) {
   return new Promise((resolve, reject) => {
     const ext = file.name.split('.').pop().toLowerCase();
@@ -29,7 +81,7 @@ export function parseFile(file) {
 function parseCSV(file) {
   return new Promise((resolve, reject) => {
     Papa.parse(file, {
-      header: true,
+      header: false,
       skipEmptyLines: true,
       dynamicTyping: false,
       complete(results) {
@@ -37,10 +89,27 @@ function parseCSV(file) {
           reject(new Error('Failed to parse CSV: ' + results.errors[0].message));
           return;
         }
+
+        const rawRows = results.data;
+        if (rawRows.length < 2) {
+          reject(new Error('The file has too few rows to analyze.'));
+          return;
+        }
+
+        const headerRowIndex = detectHeaderRow(rawRows);
+        const maxCols = Math.max(...rawRows.map(r => r.length));
+
+        // Normalize all rows to the same column count
+        const normalized = rawRows.map(r => {
+          const row = [...r];
+          while (row.length < maxCols) row.push('');
+          return row;
+        });
+
         resolve({
-          headers: results.meta.fields || [],
-          rows: results.data,
-          rowCount: results.data.length,
+          rawRows: normalized,
+          headerRowIndex,
+          rowCount: normalized.length - headerRowIndex - 1,
           fileName: file.name,
         });
       },
@@ -60,18 +129,40 @@ function parseXLSX(file) {
         const workbook = XLSX.read(data, { type: 'array', cellDates: true });
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
-        const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
 
-        if (json.length === 0) {
-          reject(new Error('The spreadsheet appears to be empty.'));
+        // Parse as raw arrays (header: 1 means "use row indices")
+        const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+
+        if (rawRows.length < 2) {
+          reject(new Error('The spreadsheet appears to be empty or has too few rows.'));
           return;
         }
 
-        const headers = Object.keys(json[0]);
+        // Normalize column count
+        const maxCols = Math.max(...rawRows.map(r => r.length));
+        const normalized = rawRows.map(r => {
+          const row = [...r];
+          while (row.length < maxCols) row.push('');
+          return row.map(cell => {
+            // Convert Date objects to readable strings
+            if (cell instanceof Date) {
+              return cell.toLocaleDateString('en-GB');
+            }
+            return cell;
+          });
+        });
+
+        // Filter out fully empty rows
+        const nonEmpty = normalized.filter(row =>
+          row.some(cell => String(cell || '').trim() !== '')
+        );
+
+        const headerRowIndex = detectHeaderRow(nonEmpty);
+
         resolve({
-          headers,
-          rows: json,
-          rowCount: json.length,
+          rawRows: nonEmpty,
+          headerRowIndex,
+          rowCount: nonEmpty.length - headerRowIndex - 1,
           fileName: file.name,
         });
       } catch (err) {
@@ -178,37 +269,12 @@ async function parsePDF(file) {
     );
   }
 
-  // First substantial row is treated as headers
-  const headerRow = substantialRows[0];
-  const dataRows = substantialRows.slice(1);
-
-  // Build headers — use column letters for empty headers
-  const headers = headerRow.map((h, i) => h.trim() || `Column ${String.fromCharCode(65 + i)}`);
-
-  // Convert data rows to objects keyed by headers
-  const rows = dataRows.map((row) => {
-    const obj = {};
-    headers.forEach((header, i) => {
-      obj[header] = (row[i] || '').trim();
-    });
-    return obj;
-  });
-
-  // Filter out rows where all values are empty
-  const nonEmptyRows = rows.filter((row) =>
-    Object.values(row).some((v) => v !== '')
-  );
-
-  if (nonEmptyRows.length === 0) {
-    throw new Error(
-      'The PDF contains headers but no data rows. Please check the file and try again.'
-    );
-  }
+  const headerRowIndex = detectHeaderRow(substantialRows);
 
   return {
-    headers,
-    rows: nonEmptyRows,
-    rowCount: nonEmptyRows.length,
+    rawRows: substantialRows,
+    headerRowIndex,
+    rowCount: substantialRows.length - headerRowIndex - 1,
     fileName: file.name,
   };
 }
