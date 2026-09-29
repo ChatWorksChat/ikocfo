@@ -68,31 +68,53 @@ export default function StatementPreview({ parsedData, onConfirm }) {
       {error && <div className="alert alert-error">{error}</div>}
 
       <div className="table-wrapper" style={{ marginBottom: '28px' }}>
-        <table>
+        <table style={{ borderCollapse: 'collapse' }}>
           <thead>
             <tr>
-              {headers.map(h => (
-                <th key={h}>
-                  <div style={{ marginBottom: '6px', fontSize: 'var(--font-size-xs)' }}>{h}</div>
-                  <select
-                    value={columnMapping[h] || 'ignore'}
-                    onChange={(e) => handleMappingChange(h, e.target.value)}
-                    className="form-input"
-                    style={{ padding: '4px 8px', fontSize: 'var(--font-size-xs)', minWidth: '100px' }}
-                  >
-                    {COLUMN_TYPES.map(ct => (
-                      <option key={ct.key} value={ct.key}>{ct.label}</option>
-                    ))}
-                  </select>
-                </th>
-              ))}
+              {headers.map((h, idx) => {
+                const mapped = columnMapping[h] || 'ignore';
+                const typeColor = mapped === 'date' ? '#8458a3'
+                  : mapped === 'balance' ? '#2980b9'
+                  : mapped === 'debit' ? '#e74c3c'
+                  : mapped === 'credit' ? '#27ae60'
+                  : mapped === 'description' ? '#f39c12'
+                  : mapped === 'amount' ? '#2980b9'
+                  : 'transparent';
+                return (
+                  <th key={h} style={{
+                    borderLeft: idx > 0 ? '1px solid var(--color-border)' : 'none',
+                    borderBottom: `3px solid ${typeColor}`,
+                    verticalAlign: 'bottom',
+                    position: 'relative',
+                  }}>
+                    <div style={{ marginBottom: '6px', fontSize: 'var(--font-size-xs)', fontWeight: 600 }}>{h}</div>
+                    <select
+                      value={mapped}
+                      onChange={(e) => handleMappingChange(h, e.target.value)}
+                      className="form-input"
+                      style={{
+                        padding: '4px 8px',
+                        fontSize: 'var(--font-size-xs)',
+                        minWidth: '100px',
+                        borderColor: typeColor !== 'transparent' ? typeColor : undefined,
+                      }}
+                    >
+                      {COLUMN_TYPES.map(ct => (
+                        <option key={ct.key} value={ct.key}>{ct.label}</option>
+                      ))}
+                    </select>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
             {previewRows.map((row, i) => (
               <tr key={i}>
-                {headers.map(h => (
-                  <td key={h}>{row[h] != null ? String(row[h]) : ''}</td>
+                {headers.map((h, idx) => (
+                  <td key={h} style={{
+                    borderLeft: idx > 0 ? '1px solid var(--color-border)' : 'none',
+                  }}>{row[h] != null ? String(row[h]) : ''}</td>
                 ))}
               </tr>
             ))}
