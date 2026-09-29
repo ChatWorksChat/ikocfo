@@ -9,9 +9,10 @@ import {
   editUser,
   deleteUser,
 } from '../lib/auth.js';
-import { BANK_RATES } from '../lib/constants.js';
+import { BANK_RATES, PLANS, STRIPE } from '../lib/constants.js';
+import { isStripeConfigured } from '../lib/stripe.js';
 
-const TABS = ['Overview', 'Users', 'System'];
+const TABS = ['Overview', 'Users', 'Payments', 'Integrations', 'System'];
 
 export default function AdminPage() {
   const [tab, setTab] = useState('Overview');
@@ -561,6 +562,346 @@ export default function AdminPage() {
           </div>
           <div style={{ marginTop: '12px', fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)' }}>
             Showing {filteredUsers.length} of {users.length} users
+          </div>
+        </div>
+      )}
+
+      {/* Payments tab */}
+      {tab === 'Payments' && (
+        <div>
+          {/* Subscription stats */}
+          <h3 style={{ marginBottom: '16px' }}>Subscription Overview</h3>
+          <div className="admin-stats-grid">
+            <div className="glass-card admin-stat-card">
+              <div className="admin-stat-value">{stats?.planBreakdown?.free || 0}</div>
+              <div className="admin-stat-label">Free Users</div>
+            </div>
+            <div className="glass-card admin-stat-card">
+              <div className="admin-stat-value" style={{ color: 'var(--color-primary)' }}>{stats?.planBreakdown?.basic || 0}</div>
+              <div className="admin-stat-label">Basic ($9/mo)</div>
+            </div>
+            <div className="glass-card admin-stat-card">
+              <div className="admin-stat-value" style={{ color: 'var(--color-success)' }}>{stats?.planBreakdown?.pro || 0}</div>
+              <div className="admin-stat-label">Pro ($29/mo)</div>
+            </div>
+            <div className="glass-card admin-stat-card">
+              <div className="admin-stat-value" style={{ color: 'var(--color-primary)' }}>
+                ${((stats?.planBreakdown?.basic || 0) * 9) + ((stats?.planBreakdown?.pro || 0) * 29)}
+              </div>
+              <div className="admin-stat-label">Est. MRR</div>
+            </div>
+          </div>
+
+          {/* Payment provider status */}
+          <h3 style={{ marginTop: '32px', marginBottom: '16px' }}>Payment Providers</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+            {/* Stripe Card Payments */}
+            <div className="glass-card" style={{ padding: '24px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <div>
+                  <strong style={{ fontSize: '1rem' }}>Stripe — Card Payments</strong>
+                  <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', marginTop: '2px' }}>
+                    Visa, Mastercard, Amex, international cards
+                  </div>
+                </div>
+                <span style={{
+                  padding: '4px 12px', borderRadius: '20px', fontSize: 'var(--font-size-xs)', fontWeight: 700,
+                  background: isStripeConfigured() ? 'rgba(46, 204, 113, 0.12)' : 'rgba(243, 156, 18, 0.12)',
+                  color: isStripeConfigured() ? 'var(--color-success)' : '#b7791f',
+                }}>
+                  {isStripeConfigured() ? 'Active' : 'Not Configured'}
+                </span>
+              </div>
+              <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border)' }}>
+                  <span>Publishable Key</span>
+                  <span style={{ fontFamily: 'monospace', color: STRIPE.publishableKey ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                    {STRIPE.publishableKey ? `${STRIPE.publishableKey.slice(0, 12)}...` : 'Not set'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border)' }}>
+                  <span>Basic Price ID</span>
+                  <span style={{ fontFamily: 'monospace', color: STRIPE.prices.basic ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                    {STRIPE.prices.basic ? `${STRIPE.prices.basic.slice(0, 16)}...` : 'Not set'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
+                  <span>Pro Price ID</span>
+                  <span style={{ fontFamily: 'monospace', color: STRIPE.prices.pro ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                    {STRIPE.prices.pro ? `${STRIPE.prices.pro.slice(0, 16)}...` : 'Not set'}
+                  </span>
+                </div>
+              </div>
+              {!isStripeConfigured() && (
+                <div style={{ marginTop: '12px', padding: '10px 14px', background: 'rgba(243, 156, 18, 0.06)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--font-size-xs)', color: '#b7791f' }}>
+                  Set VITE_STRIPE_PK, VITE_STRIPE_PRICE_BASIC, and VITE_STRIPE_PRICE_PRO in Amplify environment variables to enable card payments.
+                </div>
+              )}
+            </div>
+
+            {/* M-Pesa Mobile Payments */}
+            <div className="glass-card" style={{ padding: '24px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <div>
+                  <strong style={{ fontSize: '1rem' }}>M-Pesa — Mobile Payments</strong>
+                  <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', marginTop: '2px' }}>
+                    Safaricom M-Pesa STK Push (Kenya)
+                  </div>
+                </div>
+                <span style={{
+                  padding: '4px 12px', borderRadius: '20px', fontSize: 'var(--font-size-xs)', fontWeight: 700,
+                  background: 'rgba(136, 136, 136, 0.12)',
+                  color: 'var(--color-text-muted)',
+                }}>
+                  Coming Soon
+                </span>
+              </div>
+              <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border)' }}>
+                  <span>Consumer Key</span>
+                  <span style={{ fontFamily: 'monospace', color: 'var(--color-danger)' }}>Not set</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border)' }}>
+                  <span>Consumer Secret</span>
+                  <span style={{ fontFamily: 'monospace', color: 'var(--color-danger)' }}>Not set</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
+                  <span>Shortcode</span>
+                  <span style={{ fontFamily: 'monospace', color: 'var(--color-danger)' }}>Not set</span>
+                </div>
+              </div>
+              <div style={{ marginTop: '12px', padding: '10px 14px', background: 'rgba(136, 136, 136, 0.06)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
+                M-Pesa integration requires a Safaricom Daraja API account. Configure MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, and MPESA_SHORTCODE.
+              </div>
+            </div>
+          </div>
+
+          {/* Subscriber table */}
+          <h3 style={{ marginTop: '32px', marginBottom: '16px' }}>Paid Subscribers</h3>
+          <div className="glass-card" style={{ padding: '4px' }}>
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Email</th>
+                    <th>Name</th>
+                    <th>Plan</th>
+                    <th>Status</th>
+                    <th>Payment Method</th>
+                    <th>Joined</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.filter(u => u.plan && u.plan !== 'free').length === 0 ? (
+                    <tr>
+                      <td colSpan="6" style={{ textAlign: 'center', padding: '24px', color: 'var(--color-text-muted)' }}>
+                        No paid subscribers yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    users.filter(u => u.plan && u.plan !== 'free').map(u => (
+                      <tr key={u.email}>
+                        <td>{u.email}</td>
+                        <td>{`${u.firstName || ''} ${u.lastName || ''}`.trim() || u.companyName || '-'}</td>
+                        <td>
+                          <span style={{
+                            padding: '2px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 700,
+                            background: u.plan === 'pro' ? 'rgba(46, 204, 113, 0.12)' : 'rgba(132, 88, 163, 0.12)',
+                            color: u.plan === 'pro' ? 'var(--color-success)' : 'var(--color-primary)',
+                          }}>
+                            {PLANS[u.plan]?.name || u.plan}
+                          </span>
+                        </td>
+                        <td>
+                          <span style={{ color: u.status === 'active' ? 'var(--color-success)' : 'var(--color-danger)', fontWeight: 700, fontSize: '0.8rem' }}>
+                            {u.status || 'active'}
+                          </span>
+                        </td>
+                        <td style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
+                          {isStripeConfigured() ? 'Stripe' : 'Manual'}
+                        </td>
+                        <td style={{ fontSize: '0.8rem' }}>{u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '-'}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Integrations tab */}
+      {tab === 'Integrations' && (
+        <div>
+          <h3 style={{ marginBottom: '16px' }}>Service Integrations</h3>
+          <div style={{ display: 'grid', gap: '16px' }}>
+
+            {/* Stripe */}
+            <div className="glass-card" style={{ padding: '24px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div style={{
+                    width: '40px', height: '40px', borderRadius: '8px',
+                    background: 'linear-gradient(135deg, #635BFF, #7C3AED)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: '#fff', fontWeight: 700, fontSize: '0.9rem',
+                  }}>S</div>
+                  <div>
+                    <strong>Stripe</strong>
+                    <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>Card payments, subscriptions, billing</div>
+                  </div>
+                </div>
+                <span style={{
+                  padding: '4px 12px', borderRadius: '20px', fontSize: 'var(--font-size-xs)', fontWeight: 700,
+                  background: isStripeConfigured() ? 'rgba(46, 204, 113, 0.12)' : 'rgba(243, 156, 18, 0.12)',
+                  color: isStripeConfigured() ? 'var(--color-success)' : '#b7791f',
+                }}>
+                  {isStripeConfigured() ? 'Connected' : 'Not Configured'}
+                </span>
+              </div>
+              <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: 'var(--font-size-sm)' }}>
+                <div style={{ padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)' }}>
+                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>Webhook URL</div>
+                  <code style={{ fontSize: '0.7rem', wordBreak: 'break-all' }}>
+                    {window.location.origin.replace('main.', '').replace('.amplifyapp.com', '')}/api/stripe/webhook
+                  </code>
+                </div>
+                <div style={{ padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)' }}>
+                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>Success Redirect</div>
+                  <code style={{ fontSize: '0.7rem' }}>/dashboard?session_id=...</code>
+                </div>
+              </div>
+              {!isStripeConfigured() && (
+                <div style={{ marginTop: '12px', padding: '14px', background: 'rgba(243, 156, 18, 0.06)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(243, 156, 18, 0.15)' }}>
+                  <strong style={{ fontSize: 'var(--font-size-sm)' }}>Setup Instructions:</strong>
+                  <ol style={{ margin: '8px 0 0', paddingLeft: '20px', fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
+                    <li>Create a Stripe account at <strong>stripe.com</strong></li>
+                    <li>Create products for Basic ($9/mo) and Pro ($29/mo) plans</li>
+                    <li>Copy the publishable key and price IDs</li>
+                    <li>Add to Amplify environment variables: VITE_STRIPE_PK, VITE_STRIPE_PRICE_BASIC, VITE_STRIPE_PRICE_PRO</li>
+                    <li>Redeploy the application</li>
+                  </ol>
+                </div>
+              )}
+            </div>
+
+            {/* M-Pesa */}
+            <div className="glass-card" style={{ padding: '24px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div style={{
+                    width: '40px', height: '40px', borderRadius: '8px',
+                    background: 'linear-gradient(135deg, #4CAF50, #2E7D32)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: '#fff', fontWeight: 700, fontSize: '0.9rem',
+                  }}>M</div>
+                  <div>
+                    <strong>M-Pesa (Safaricom Daraja)</strong>
+                    <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>Mobile money payments via STK Push (Kenya)</div>
+                  </div>
+                </div>
+                <span style={{
+                  padding: '4px 12px', borderRadius: '20px', fontSize: 'var(--font-size-xs)', fontWeight: 700,
+                  background: 'rgba(136, 136, 136, 0.12)',
+                  color: 'var(--color-text-muted)',
+                }}>
+                  Coming Soon
+                </span>
+              </div>
+              <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: 'var(--font-size-sm)' }}>
+                <div style={{ padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)' }}>
+                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>API Environment</div>
+                  <span style={{ fontSize: '0.8rem' }}>Sandbox (not configured)</span>
+                </div>
+                <div style={{ padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)' }}>
+                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>Callback URL</div>
+                  <code style={{ fontSize: '0.7rem' }}>/api/mpesa/callback</code>
+                </div>
+              </div>
+              <div style={{ marginTop: '12px', padding: '14px', background: 'rgba(136, 136, 136, 0.04)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
+                <strong style={{ fontSize: 'var(--font-size-sm)' }}>Setup Instructions:</strong>
+                <ol style={{ margin: '8px 0 0', paddingLeft: '20px', fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
+                  <li>Register on the Safaricom Daraja portal at <strong>developer.safaricom.co.ke</strong></li>
+                  <li>Create an app and get Consumer Key and Consumer Secret</li>
+                  <li>Apply for an M-Pesa Shortcode (Paybill or Till)</li>
+                  <li>Add to Lambda environment: MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_SHORTCODE, MPESA_PASSKEY</li>
+                  <li>Deploy the M-Pesa Lambda handler and API Gateway route</li>
+                </ol>
+              </div>
+            </div>
+
+            {/* AWS SES */}
+            <div className="glass-card" style={{ padding: '24px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div style={{
+                    width: '40px', height: '40px', borderRadius: '8px',
+                    background: 'linear-gradient(135deg, #FF9900, #E8850C)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: '#fff', fontWeight: 700, fontSize: '0.8rem',
+                  }}>SES</div>
+                  <div>
+                    <strong>AWS SES — Email Service</strong>
+                    <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>Transactional emails (verification, invites, credentials)</div>
+                  </div>
+                </div>
+                <span style={{
+                  padding: '4px 12px', borderRadius: '20px', fontSize: 'var(--font-size-xs)', fontWeight: 700,
+                  background: 'rgba(243, 156, 18, 0.12)',
+                  color: '#b7791f',
+                }}>
+                  {stats?.sesStatus || 'Sandbox'}
+                </span>
+              </div>
+              <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: 'var(--font-size-sm)' }}>
+                <div style={{ padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)' }}>
+                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>Sender Address</div>
+                  <span style={{ fontSize: '0.8rem' }}>administrator@forwardsflow.com</span>
+                </div>
+                <div style={{ padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)' }}>
+                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>Region</div>
+                  <span style={{ fontSize: '0.8rem' }}>eu-west-1</span>
+                </div>
+              </div>
+            </div>
+
+            {/* WebAuthn / FIDO2 */}
+            <div className="glass-card" style={{ padding: '24px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div style={{
+                    width: '40px', height: '40px', borderRadius: '8px',
+                    background: 'linear-gradient(135deg, #8458a3, #6A3D8F)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: '#fff', fontWeight: 700, fontSize: '0.7rem',
+                  }}>2FA</div>
+                  <div>
+                    <strong>WebAuthn / FIDO2 — Biometric Auth</strong>
+                    <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>Fingerprint, Windows Hello, Touch ID, TOTP</div>
+                  </div>
+                </div>
+                <span style={{
+                  padding: '4px 12px', borderRadius: '20px', fontSize: 'var(--font-size-xs)', fontWeight: 700,
+                  background: 'rgba(46, 204, 113, 0.12)',
+                  color: 'var(--color-success)',
+                }}>
+                  Active
+                </span>
+              </div>
+              <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: 'var(--font-size-sm)' }}>
+                <div style={{ padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)' }}>
+                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>MFA-Enabled Users</div>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>
+                    {users.filter(u => u.mfaEnabled).length} of {users.length}
+                  </span>
+                </div>
+                <div style={{ padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)' }}>
+                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>RP ID</div>
+                  <code style={{ fontSize: '0.7rem' }}>d3e8omyd97oi7s.amplifyapp.com</code>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

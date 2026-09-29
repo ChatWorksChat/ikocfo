@@ -472,6 +472,8 @@ def handle_admin_users():
         result = table.scan()
         users = []
         for item in result.get('Items', []):
+            has_totp = bool(item.get('mfaTotpEnabled'))
+            has_webauthn = len(item.get('webauthnCredentials', [])) > 0
             users.append({
                 'email': item['email'],
                 'firstName': item.get('firstName', ''),
@@ -484,6 +486,7 @@ def handle_admin_users():
                 'status': item.get('status', 'active'),
                 'createdAt': item.get('createdAt', ''),
                 'lastLoginAt': item.get('lastLoginAt', ''),
+                'mfaEnabled': has_totp or has_webauthn,
             })
         users.sort(key=lambda u: u.get('createdAt', ''), reverse=True)
         return response(200, {'users': users})
