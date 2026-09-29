@@ -56,6 +56,10 @@ dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME)
 ses = boto3.client('ses', region_name=SES_REGION)
 
+# Integration config — fields that must be masked in API responses
+STRIPE_SENSITIVE_FIELDS = {'secretKey', 'webhookSecret'}
+MPESA_SENSITIVE_FIELDS = {'consumerKey', 'consumerSecret', 'passkey'}
+
 # --- Helpers ---
 
 def response(status_code, body):
@@ -91,6 +95,13 @@ def generate_password(length=12):
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+def mask_value(value):
+    """Return a masked version of a sensitive string, showing only last 4 chars."""
+    if not value or len(value) <= 4:
+        return '****'
+    return '*' * (len(value) - 4) + value[-4:]
 
 
 def send_email(to, subject, body_text, body_html=None):
@@ -1600,6 +1611,203 @@ def handle_delete_bank_rate(rate_id):
         return response(500, {'error': 'Failed to delete bank rate.'})
 
 
+# --- Integration Config ---
+
+STRIPE_FIELDS = ['publishableKey', 'secretKey', 'basicPriceId', 'proPriceId', 'webhookSecret']
+MPESA_FIELDS = ['consumerKey', 'consumerSecret', 'shortcode', 'passkey', 'environment', 'callbackUrl']
+
+
+def handle_get_config(provider):
+    """Return integration config, masking sensitive fields."""
+    key = f'config#{provider}'
+    sensitive = STRIPE_SENSITIVE_FIELDS if provider == 'stripe' else MPESA_SENSITIVE_FIELDS
+
+    try:
+        result = table.get_item(Key={'email': key})
+        item = result.get('Item')
+        if not item:
+            return response(200, {'provider': provider, 'configured': False, 'config': {}})
+
+        config = {}
+        for k, v in item.items():
+            if k == 'email':
+                continue
+            if k in sensitive:
+                config[k] = mask_value(v) if v else ''
+            else:
+                config[k] = v
+
+        # Determine if provider is configured
+        if provider == 'stripe':
+            configured = bool(item.get('publishableKey') and item.get('basicPriceId') and item.get('proPriceId'))
+        else:
+            configured = bool(item.get('consumerKey') and item.get('consumerSecret') and item.get('shortcode'))
+
+        return response(200, {'provider': provider, 'configured': configured, 'config': config})
+    except ClientError as e:
+        print(f'DynamoDB error: {e}')
+        return response(500, {'error': f'Failed to fetch {provider} config.'})
+
+
+def handle_save_config(provider, body):
+    """Save integration config. Merges with existing to preserve unchanged sensitive fields."""
+    key = f'config#{provider}'
+    sensitive = STRIPE_SENSITIVE_FIELDS if provider == 'stripe' else MPESA_SENSITIVE_FIELDS
+    fields = STRIPE_FIELDS if provider == 'stripe' else MPESA_FIELDS
+
+    # Fetch existing item to preserve sensitive fields sent as masked
+    try:
+        existing = table.get_item(Key={'email': key}).get('Item', {})
+    except ClientError:
+        existing = {}
+
+    item = {'email': key, 'updatedAt': now_iso()}
+
+    for field in fields:
+        value = (body.get(field) or '').strip()
+        if field in sensitive:
+            # If the value looks masked (contains ****), keep the existing value
+            if '****' in value or not value:
+                item[field] = existing.get(field, '')
+            else:
+                item[field] = value
+        else:
+            item[field] = value
+
+    try:
+        table.put_item(Item=item)
+        # Return config with sensitive fields masked
+        result_config = {}
+        for k, v in item.items():
+            if k == 'email':
+                continue
+            if k in sensitive:
+                result_config[k] = mask_value(v) if v else ''
+            else:
+                result_config[k] = v
+
+        if provider == 'stripe':
+            configured = bool(item.get('publishableKey') and item.get('basicPriceId') and item.get('proPriceId'))
+        else:
+            configured = bool(item.get('consumerKey') and item.get('consumerSecret') and item.get('shortcode'))
+
+        return response(200, {'provider': provider, 'configured': configured, 'config': result_config})
+    except ClientError as e:
+        print(f'DynamoDB error: {e}')
+        return response(500, {'error': f'Failed to save {provider} config.'})
+
+
+def handle_get_public_config():
+    """Return non-sensitive payment config for frontend use (Stripe PK, price IDs)."""
+    result_data = {'stripe': {'configured': False}, 'mpesa': {'configured': False}}
+    try:
+        stripe_item = table.get_item(Key={'email': 'config#stripe'}).get('Item')
+        if stripe_item:
+            result_data['stripe'] = {
+                'configured': bool(stripe_item.get('publishableKey') and stripe_item.get('basicPriceId') and stripe_item.get('proPriceId')),
+                'publishableKey': stripe_item.get('publishableKey', ''),
+                'basicPriceId': stripe_item.get('basicPriceId', ''),
+                'proPriceId': stripe_item.get('proPriceId', ''),
+            }
+    except ClientError:
+        pass
+
+    try:
+        mpesa_item = table.get_item(Key={'email': 'config#mpesa'}).get('Item')
+        if mpesa_item:
+            result_data['mpesa'] = {
+                'configured': bool(mpesa_item.get('consumerKey') and mpesa_item.get('consumerSecret') and mpesa_item.get('shortcode')),
+                'shortcode': mpesa_item.get('shortcode', ''),
+                'environment': mpesa_item.get('environment', 'sandbox'),
+            }
+    except ClientError:
+        pass
+
+    return response(200, result_data)
+
+
+# --- Pricing Plans Config ---
+
+DEFAULT_PLANS = [
+    {
+        'id': 'free',
+        'name': 'Free',
+        'price': 0,
+        'currency': 'USD',
+        'interval': 'month',
+        'statements': 1,
+        'maxRows': 1000,
+        'xirr': False,
+        'pdfExport': False,
+        'description': 'Try the basics',
+        'features': ['1 statement per month', 'Up to 1,000 rows', 'Basic overdraft analysis', 'Column auto-detection'],
+    },
+    {
+        'id': 'basic',
+        'name': 'Basic',
+        'price': 9,
+        'currency': 'USD',
+        'interval': 'month',
+        'statements': 10,
+        'maxRows': 5000,
+        'xirr': True,
+        'pdfExport': True,
+        'description': 'For regular auditing',
+        'features': ['10 statements per month', 'Up to 5,000 rows', 'XIRR calculations', 'PDF export', 'Cost-ratio analysis'],
+    },
+    {
+        'id': 'pro',
+        'name': 'Pro',
+        'price': 29,
+        'currency': 'USD',
+        'interval': 'month',
+        'statements': 0,
+        'maxRows': 0,
+        'xirr': True,
+        'pdfExport': True,
+        'description': 'Unlimited power',
+        'features': ['Unlimited statements', 'Unlimited rows', 'XIRR calculations', 'PDF export', 'Cost-ratio analysis', 'Priority support'],
+    },
+]
+
+
+def handle_get_plans():
+    """Return pricing plans. Fetches from DynamoDB or returns defaults."""
+    key = 'config#plans'
+    try:
+        result = table.get_item(Key={'email': key})
+        item = result.get('Item')
+        if item and item.get('plans'):
+            plans = json.loads(item['plans']) if isinstance(item.get('plans'), str) else item.get('plans')
+            return response(200, {'plans': plans})
+    except ClientError:
+        pass
+    return response(200, {'plans': DEFAULT_PLANS})
+
+
+def handle_save_plans(body):
+    """Save pricing plans to DynamoDB."""
+    plans = body.get('plans')
+    if not plans or not isinstance(plans, list):
+        return response(400, {'error': 'Plans array is required.'})
+
+    # Validate each plan has required fields
+    for plan in plans:
+        if not plan.get('id') or not plan.get('name'):
+            return response(400, {'error': 'Each plan must have an id and name.'})
+
+    try:
+        table.put_item(Item={
+            'email': 'config#plans',
+            'plans': json.dumps(plans),
+            'updatedAt': now_iso(),
+        })
+        return response(200, {'plans': plans})
+    except ClientError as e:
+        print(f'DynamoDB error: {e}')
+        return response(500, {'error': 'Failed to save plans.'})
+
+
 # --- Main Handler ---
 
 def lambda_handler(event, context):
@@ -1724,5 +1932,28 @@ def lambda_handler(event, context):
     if method == 'DELETE' and '/admin/bank-rates/' in path:
         rate_id = path.split('/')[-1]
         return handle_delete_bank_rate(rate_id)
+
+    # --- Integration config routes ---
+    if method == 'GET' and path == '/config/payment':
+        return handle_get_public_config()
+
+    if method == 'GET' and path == '/admin/config/stripe':
+        return handle_get_config('stripe')
+
+    if method == 'GET' and path == '/admin/config/mpesa':
+        return handle_get_config('mpesa')
+
+    if method == 'PUT' and path == '/admin/config/stripe':
+        return handle_save_config('stripe', body)
+
+    if method == 'PUT' and path == '/admin/config/mpesa':
+        return handle_save_config('mpesa', body)
+
+    # --- Pricing plans routes ---
+    if method == 'GET' and path == '/config/plans':
+        return handle_get_plans()
+
+    if method == 'PUT' and path == '/admin/config/plans':
+        return handle_save_plans(body)
 
     return response(404, {'error': 'Not found'})

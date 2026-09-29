@@ -380,3 +380,56 @@ export async function acceptInvite(token, password) {
     return { success: false, error: 'Unable to connect to server.' };
   }
 }
+
+// --- Integration Config API ---
+
+export async function fetchIntegrationConfig(provider) {
+  try {
+    const data = await apiGet(`/admin/config/${provider}`);
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, provider: data.provider, configured: data.configured, config: data.config || {} };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
+export async function saveIntegrationConfig(provider, config) {
+  try {
+    const data = await apiPut(`/admin/config/${provider}`, config);
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, provider: data.provider, configured: data.configured, config: data.config || {} };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
+export async function fetchPublicPaymentConfig() {
+  try {
+    const data = await apiGet('/config/payment');
+    return { success: true, stripe: data.stripe || { configured: false }, mpesa: data.mpesa || { configured: false } };
+  } catch {
+    return { success: false, stripe: { configured: false }, mpesa: { configured: false } };
+  }
+}
+
+// --- Pricing Plans API ---
+
+export async function fetchPlans() {
+  try {
+    const data = await apiGet('/config/plans');
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, plans: data.plans || [] };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
+export async function savePlans(plans) {
+  try {
+    const data = await apiPut('/admin/config/plans', { plans });
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, plans: data.plans || [] };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}

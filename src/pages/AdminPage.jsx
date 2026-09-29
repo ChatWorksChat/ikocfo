@@ -12,11 +12,14 @@ import {
   addBankRate,
   updateBankRate,
   deleteBankRate,
+  fetchIntegrationConfig,
+  saveIntegrationConfig,
+  fetchPlans,
+  savePlans,
 } from '../lib/auth.js';
-import { PLANS, STRIPE, KENYA_BANKS } from '../lib/constants.js';
-import { isStripeConfigured } from '../lib/stripe.js';
+import { PLANS, KENYA_BANKS } from '../lib/constants.js';
 
-const TABS = ['Overview', 'Users', 'Payments', 'Integrations', 'System'];
+const TABS = ['Overview', 'Users', 'Payments', 'Integrations', 'Pricing', 'System'];
 
 export default function AdminPage() {
   const [tab, setTab] = useState('Overview');
@@ -52,18 +55,54 @@ export default function AdminPage() {
   const [savingRate, setSavingRate] = useState(false);
   const [deletingRateId, setDeletingRateId] = useState(null);
 
+  // Integration config state
+  const [showStripeConfig, setShowStripeConfig] = useState(false);
+  const [stripeConfig, setStripeConfig] = useState({});
+  const [stripeForm, setStripeForm] = useState({ publishableKey: '', secretKey: '', basicPriceId: '', proPriceId: '', webhookSecret: '' });
+  const [stripeConfigured, setStripeConfigured] = useState(false);
+  const [savingStripe, setSavingStripe] = useState(false);
+
+  const [showMpesaConfig, setShowMpesaConfig] = useState(false);
+  const [mpesaConfig, setMpesaConfig] = useState({});
+  const [mpesaForm, setMpesaForm] = useState({ consumerKey: '', consumerSecret: '', shortcode: '', passkey: '', environment: 'sandbox', callbackUrl: '' });
+  const [mpesaConfigured, setMpesaConfigured] = useState(false);
+  const [savingMpesa, setSavingMpesa] = useState(false);
+
+  // Pricing plans state
+  const [pricingPlans, setPricingPlans] = useState([]);
+  const [editingPlan, setEditingPlan] = useState(null);
+  const [planForm, setPlanForm] = useState({ id: '', name: '', price: '', currency: 'USD', interval: 'month', description: '', features: '', statements: '', maxRows: '', xirr: false, pdfExport: false });
+  const [savingPlan, setSavingPlan] = useState(false);
+
   async function loadData() {
     setLoading(true);
     setError('');
-    const [usersRes, statsRes, ratesRes] = await Promise.all([
+    const [usersRes, statsRes, ratesRes, stripeRes, mpesaRes, plansRes] = await Promise.all([
       fetchAdminUsers(),
       fetchAdminStats(),
       fetchBankRates(),
+      fetchIntegrationConfig('stripe'),
+      fetchIntegrationConfig('mpesa'),
+      fetchPlans(),
     ]);
     if (usersRes.success) setUsers(usersRes.users);
     else setError(usersRes.error);
     if (statsRes.success) setStats(statsRes.stats);
     if (ratesRes.success) setBankRates(ratesRes.rates);
+    if (stripeRes.success) {
+      setStripeConfigured(stripeRes.configured);
+      setStripeConfig(stripeRes.config);
+    }
+    if (mpesaRes.success) {
+      setMpesaConfigured(mpesaRes.configured);
+      setMpesaConfig(mpesaRes.config);
+    }
+    if (plansRes.success && plansRes.plans.length > 0) setPricingPlans(plansRes.plans);
+    else setPricingPlans([
+      { id: 'free', name: 'Free', price: 0, currency: 'USD', interval: 'month', statements: 1, maxRows: 1000, xirr: false, pdfExport: false, description: 'Try the basics', features: ['1 statement per month', 'Up to 1,000 rows', 'Basic overdraft analysis', 'Column auto-detection'] },
+      { id: 'basic', name: 'Basic', price: 9, currency: 'USD', interval: 'month', statements: 10, maxRows: 5000, xirr: true, pdfExport: true, description: 'For regular auditing', features: ['10 statements per month', 'Up to 5,000 rows', 'XIRR calculations', 'PDF export', 'Cost-ratio analysis'] },
+      { id: 'pro', name: 'Pro', price: 29, currency: 'USD', interval: 'month', statements: 0, maxRows: 0, xirr: true, pdfExport: true, description: 'Unlimited power', features: ['Unlimited statements', 'Unlimited rows', 'XIRR calculations', 'PDF export', 'Cost-ratio analysis', 'Priority support'] },
+    ]);
     setLoading(false);
   }
 
@@ -592,15 +631,15 @@ export default function AdminPage() {
             </div>
             <div className="glass-card admin-stat-card">
               <div className="admin-stat-value" style={{ color: 'var(--color-primary)' }}>{stats?.planBreakdown?.basic || 0}</div>
-              <div className="admin-stat-label">Basic ($9/mo)</div>
+              <div className="admin-stat-label">Basic</div>
             </div>
             <div className="glass-card admin-stat-card">
               <div className="admin-stat-value" style={{ color: 'var(--color-success)' }}>{stats?.planBreakdown?.pro || 0}</div>
-              <div className="admin-stat-label">Pro ($29/mo)</div>
+              <div className="admin-stat-label">Pro</div>
             </div>
             <div className="glass-card admin-stat-card">
               <div className="admin-stat-value" style={{ color: 'var(--color-primary)' }}>
-                ${((stats?.planBreakdown?.basic || 0) * 9) + ((stats?.planBreakdown?.pro || 0) * 29)}
+                ${((stats?.planBreakdown?.basic || 0) * (pricingPlans.find(p => p.id === 'basic')?.price || 9)) + ((stats?.planBreakdown?.pro || 0) * (pricingPlans.find(p => p.id === 'pro')?.price || 29))}
               </div>
               <div className="admin-stat-label">Est. MRR</div>
             </div>
@@ -620,37 +659,54 @@ export default function AdminPage() {
                 </div>
                 <span style={{
                   padding: '4px 12px', borderRadius: '20px', fontSize: 'var(--font-size-xs)', fontWeight: 700,
-                  background: isStripeConfigured() ? 'rgba(46, 204, 113, 0.12)' : 'rgba(243, 156, 18, 0.12)',
-                  color: isStripeConfigured() ? 'var(--color-success)' : '#b7791f',
+                  background: stripeConfigured ? 'rgba(46, 204, 113, 0.12)' : 'rgba(243, 156, 18, 0.12)',
+                  color: stripeConfigured ? 'var(--color-success)' : '#b7791f',
                 }}>
-                  {isStripeConfigured() ? 'Active' : 'Not Configured'}
+                  {stripeConfigured ? 'Active' : 'Not Configured'}
                 </span>
               </div>
               <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border)' }}>
                   <span>Publishable Key</span>
-                  <span style={{ fontFamily: 'monospace', color: STRIPE.publishableKey ? 'var(--color-success)' : 'var(--color-danger)' }}>
-                    {STRIPE.publishableKey ? `${STRIPE.publishableKey.slice(0, 12)}...` : 'Not set'}
+                  <span style={{ fontFamily: 'monospace', color: stripeConfig.publishableKey ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                    {stripeConfig.publishableKey ? `${stripeConfig.publishableKey.slice(0, 12)}...` : 'Not set'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border)' }}>
+                  <span>Secret Key</span>
+                  <span style={{ fontFamily: 'monospace', color: stripeConfig.secretKey ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                    {stripeConfig.secretKey || 'Not set'}
                   </span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border)' }}>
                   <span>Basic Price ID</span>
-                  <span style={{ fontFamily: 'monospace', color: STRIPE.prices.basic ? 'var(--color-success)' : 'var(--color-danger)' }}>
-                    {STRIPE.prices.basic ? `${STRIPE.prices.basic.slice(0, 16)}...` : 'Not set'}
+                  <span style={{ fontFamily: 'monospace', color: stripeConfig.basicPriceId ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                    {stripeConfig.basicPriceId ? `${stripeConfig.basicPriceId.slice(0, 16)}...` : 'Not set'}
                   </span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
                   <span>Pro Price ID</span>
-                  <span style={{ fontFamily: 'monospace', color: STRIPE.prices.pro ? 'var(--color-success)' : 'var(--color-danger)' }}>
-                    {STRIPE.prices.pro ? `${STRIPE.prices.pro.slice(0, 16)}...` : 'Not set'}
+                  <span style={{ fontFamily: 'monospace', color: stripeConfig.proPriceId ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                    {stripeConfig.proPriceId ? `${stripeConfig.proPriceId.slice(0, 16)}...` : 'Not set'}
                   </span>
                 </div>
               </div>
-              {!isStripeConfigured() && (
-                <div style={{ marginTop: '12px', padding: '10px 14px', background: 'rgba(243, 156, 18, 0.06)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--font-size-xs)', color: '#b7791f' }}>
-                  Set VITE_STRIPE_PK, VITE_STRIPE_PRICE_BASIC, and VITE_STRIPE_PRICE_PRO in Amplify environment variables to enable card payments.
-                </div>
-              )}
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  setStripeForm({
+                    publishableKey: stripeConfig.publishableKey || '',
+                    secretKey: stripeConfig.secretKey || '',
+                    basicPriceId: stripeConfig.basicPriceId || '',
+                    proPriceId: stripeConfig.proPriceId || '',
+                    webhookSecret: stripeConfig.webhookSecret || '',
+                  });
+                  setShowStripeConfig(true);
+                }}
+                style={{ marginTop: '16px', width: '100%' }}
+              >
+                Configure Stripe
+              </button>
             </div>
 
             {/* M-Pesa Mobile Payments */}
@@ -664,29 +720,55 @@ export default function AdminPage() {
                 </div>
                 <span style={{
                   padding: '4px 12px', borderRadius: '20px', fontSize: 'var(--font-size-xs)', fontWeight: 700,
-                  background: 'rgba(136, 136, 136, 0.12)',
-                  color: 'var(--color-text-muted)',
+                  background: mpesaConfigured ? 'rgba(46, 204, 113, 0.12)' : 'rgba(243, 156, 18, 0.12)',
+                  color: mpesaConfigured ? 'var(--color-success)' : '#b7791f',
                 }}>
-                  Coming Soon
+                  {mpesaConfigured ? 'Active' : 'Not Configured'}
                 </span>
               </div>
               <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border)' }}>
                   <span>Consumer Key</span>
-                  <span style={{ fontFamily: 'monospace', color: 'var(--color-danger)' }}>Not set</span>
+                  <span style={{ fontFamily: 'monospace', color: mpesaConfig.consumerKey ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                    {mpesaConfig.consumerKey || 'Not set'}
+                  </span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border)' }}>
                   <span>Consumer Secret</span>
-                  <span style={{ fontFamily: 'monospace', color: 'var(--color-danger)' }}>Not set</span>
+                  <span style={{ fontFamily: 'monospace', color: mpesaConfig.consumerSecret ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                    {mpesaConfig.consumerSecret || 'Not set'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border)' }}>
+                  <span>Shortcode</span>
+                  <span style={{ fontFamily: 'monospace', color: mpesaConfig.shortcode ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                    {mpesaConfig.shortcode || 'Not set'}
+                  </span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
-                  <span>Shortcode</span>
-                  <span style={{ fontFamily: 'monospace', color: 'var(--color-danger)' }}>Not set</span>
+                  <span>Environment</span>
+                  <span style={{ fontFamily: 'monospace' }}>
+                    {mpesaConfig.environment || 'sandbox'}
+                  </span>
                 </div>
               </div>
-              <div style={{ marginTop: '12px', padding: '10px 14px', background: 'rgba(136, 136, 136, 0.06)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
-                M-Pesa integration requires a Safaricom Daraja API account. Configure MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, and MPESA_SHORTCODE.
-              </div>
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  setMpesaForm({
+                    consumerKey: mpesaConfig.consumerKey || '',
+                    consumerSecret: mpesaConfig.consumerSecret || '',
+                    shortcode: mpesaConfig.shortcode || '',
+                    passkey: mpesaConfig.passkey || '',
+                    environment: mpesaConfig.environment || 'sandbox',
+                    callbackUrl: mpesaConfig.callbackUrl || '',
+                  });
+                  setShowMpesaConfig(true);
+                }}
+                style={{ marginTop: '16px', width: '100%' }}
+              >
+                Configure M-Pesa
+              </button>
             </div>
           </div>
 
@@ -732,7 +814,7 @@ export default function AdminPage() {
                           </span>
                         </td>
                         <td style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
-                          {isStripeConfigured() ? 'Stripe' : 'Manual'}
+                          {stripeConfigured ? 'Stripe' : 'Manual'}
                         </td>
                         <td style={{ fontSize: '0.8rem' }}>{u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '-'}</td>
                       </tr>
@@ -766,38 +848,44 @@ export default function AdminPage() {
                     <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>Card payments, subscriptions, billing</div>
                   </div>
                 </div>
-                <span style={{
-                  padding: '4px 12px', borderRadius: '20px', fontSize: 'var(--font-size-xs)', fontWeight: 700,
-                  background: isStripeConfigured() ? 'rgba(46, 204, 113, 0.12)' : 'rgba(243, 156, 18, 0.12)',
-                  color: isStripeConfigured() ? 'var(--color-success)' : '#b7791f',
-                }}>
-                  {isStripeConfigured() ? 'Connected' : 'Not Configured'}
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{
+                    padding: '4px 12px', borderRadius: '20px', fontSize: 'var(--font-size-xs)', fontWeight: 700,
+                    background: stripeConfigured ? 'rgba(46, 204, 113, 0.12)' : 'rgba(243, 156, 18, 0.12)',
+                    color: stripeConfigured ? 'var(--color-success)' : '#b7791f',
+                  }}>
+                    {stripeConfigured ? 'Connected' : 'Not Configured'}
+                  </span>
+                  <button
+                    className="btn btn-sm btn-outline"
+                    onClick={() => {
+                      setStripeForm({
+                        publishableKey: stripeConfig.publishableKey || '',
+                        secretKey: stripeConfig.secretKey || '',
+                        basicPriceId: stripeConfig.basicPriceId || '',
+                        proPriceId: stripeConfig.proPriceId || '',
+                        webhookSecret: stripeConfig.webhookSecret || '',
+                      });
+                      setShowStripeConfig(true);
+                    }}
+                    style={{ padding: '4px 12px', fontSize: '0.75rem' }}
+                  >
+                    Configure
+                  </button>
+                </div>
               </div>
               <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: 'var(--font-size-sm)' }}>
                 <div style={{ padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)' }}>
-                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>Webhook URL</div>
+                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>Publishable Key</div>
                   <code style={{ fontSize: '0.7rem', wordBreak: 'break-all' }}>
-                    {window.location.origin.replace('main.', '').replace('.amplifyapp.com', '')}/api/stripe/webhook
+                    {stripeConfig.publishableKey ? `${stripeConfig.publishableKey.slice(0, 16)}...` : 'Not set'}
                   </code>
                 </div>
                 <div style={{ padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)' }}>
-                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>Success Redirect</div>
-                  <code style={{ fontSize: '0.7rem' }}>/dashboard?session_id=...</code>
+                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>Secret Key</div>
+                  <code style={{ fontSize: '0.7rem' }}>{stripeConfig.secretKey || 'Not set'}</code>
                 </div>
               </div>
-              {!isStripeConfigured() && (
-                <div style={{ marginTop: '12px', padding: '14px', background: 'rgba(243, 156, 18, 0.06)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(243, 156, 18, 0.15)' }}>
-                  <strong style={{ fontSize: 'var(--font-size-sm)' }}>Setup Instructions:</strong>
-                  <ol style={{ margin: '8px 0 0', paddingLeft: '20px', fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
-                    <li>Create a Stripe account at <strong>stripe.com</strong></li>
-                    <li>Create products for Basic ($9/mo) and Pro ($29/mo) plans</li>
-                    <li>Copy the publishable key and price IDs</li>
-                    <li>Add to Amplify environment variables: VITE_STRIPE_PK, VITE_STRIPE_PRICE_BASIC, VITE_STRIPE_PRICE_PRO</li>
-                    <li>Redeploy the application</li>
-                  </ol>
-                </div>
-              )}
             </div>
 
             {/* M-Pesa */}
@@ -815,33 +903,42 @@ export default function AdminPage() {
                     <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>Mobile money payments via STK Push (Kenya)</div>
                   </div>
                 </div>
-                <span style={{
-                  padding: '4px 12px', borderRadius: '20px', fontSize: 'var(--font-size-xs)', fontWeight: 700,
-                  background: 'rgba(136, 136, 136, 0.12)',
-                  color: 'var(--color-text-muted)',
-                }}>
-                  Coming Soon
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{
+                    padding: '4px 12px', borderRadius: '20px', fontSize: 'var(--font-size-xs)', fontWeight: 700,
+                    background: mpesaConfigured ? 'rgba(46, 204, 113, 0.12)' : 'rgba(243, 156, 18, 0.12)',
+                    color: mpesaConfigured ? 'var(--color-success)' : '#b7791f',
+                  }}>
+                    {mpesaConfigured ? 'Connected' : 'Not Configured'}
+                  </span>
+                  <button
+                    className="btn btn-sm btn-outline"
+                    onClick={() => {
+                      setMpesaForm({
+                        consumerKey: mpesaConfig.consumerKey || '',
+                        consumerSecret: mpesaConfig.consumerSecret || '',
+                        shortcode: mpesaConfig.shortcode || '',
+                        passkey: mpesaConfig.passkey || '',
+                        environment: mpesaConfig.environment || 'sandbox',
+                        callbackUrl: mpesaConfig.callbackUrl || '',
+                      });
+                      setShowMpesaConfig(true);
+                    }}
+                    style={{ padding: '4px 12px', fontSize: '0.75rem' }}
+                  >
+                    Configure
+                  </button>
+                </div>
               </div>
               <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: 'var(--font-size-sm)' }}>
                 <div style={{ padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)' }}>
                   <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>API Environment</div>
-                  <span style={{ fontSize: '0.8rem' }}>Sandbox (not configured)</span>
+                  <span style={{ fontSize: '0.8rem' }}>{mpesaConfigured ? (mpesaConfig.environment || 'sandbox') : 'Not configured'}</span>
                 </div>
                 <div style={{ padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)' }}>
-                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>Callback URL</div>
-                  <code style={{ fontSize: '0.7rem' }}>/api/mpesa/callback</code>
+                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>Shortcode</div>
+                  <span style={{ fontSize: '0.8rem' }}>{mpesaConfig.shortcode || 'Not set'}</span>
                 </div>
-              </div>
-              <div style={{ marginTop: '12px', padding: '14px', background: 'rgba(136, 136, 136, 0.04)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
-                <strong style={{ fontSize: 'var(--font-size-sm)' }}>Setup Instructions:</strong>
-                <ol style={{ margin: '8px 0 0', paddingLeft: '20px', fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
-                  <li>Register on the Safaricom Daraja portal at <strong>developer.safaricom.co.ke</strong></li>
-                  <li>Create an app and get Consumer Key and Consumer Secret</li>
-                  <li>Apply for an M-Pesa Shortcode (Paybill or Till)</li>
-                  <li>Add to Lambda environment: MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_SHORTCODE, MPESA_PASSKEY</li>
-                  <li>Deploy the M-Pesa Lambda handler and API Gateway route</li>
-                </ol>
               </div>
             </div>
 
@@ -916,6 +1013,184 @@ export default function AdminPage() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pricing tab */}
+      {tab === 'Pricing' && (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <h3 style={{ margin: 0 }}>Product Packages</h3>
+            <p style={{ margin: 0, fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)' }}>
+              Changes here automatically reflect on the public pricing page.
+            </p>
+          </div>
+
+          <div style={{ display: 'grid', gap: '16px' }}>
+            {pricingPlans.map((plan, idx) => (
+              <div key={plan.id} className="glass-card" style={{ padding: '24px' }}>
+                {editingPlan === plan.id ? (
+                  <div>
+                    <h4 style={{ marginBottom: '16px' }}>Edit: {plan.name}</h4>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                      <div className="form-group">
+                        <label className="form-label">Plan Name</label>
+                        <input className="form-input" value={planForm.name}
+                          onChange={e => setPlanForm(f => ({ ...f, name: e.target.value }))} />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Price</label>
+                        <input className="form-input" type="number" step="0.01" value={planForm.price}
+                          onChange={e => setPlanForm(f => ({ ...f, price: e.target.value }))} />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Currency</label>
+                        <select className="form-input" value={planForm.currency}
+                          onChange={e => setPlanForm(f => ({ ...f, currency: e.target.value }))}>
+                          <option value="USD">USD</option>
+                          <option value="KES">KES</option>
+                          <option value="EUR">EUR</option>
+                          <option value="GBP">GBP</option>
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Billing Interval</label>
+                        <select className="form-input" value={planForm.interval}
+                          onChange={e => setPlanForm(f => ({ ...f, interval: e.target.value }))}>
+                          <option value="month">Monthly</option>
+                          <option value="year">Yearly</option>
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Statements / period (0 = unlimited)</label>
+                        <input className="form-input" type="number" value={planForm.statements}
+                          onChange={e => setPlanForm(f => ({ ...f, statements: e.target.value }))} />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Max Rows (0 = unlimited)</label>
+                        <input className="form-input" type="number" value={planForm.maxRows}
+                          onChange={e => setPlanForm(f => ({ ...f, maxRows: e.target.value }))} />
+                      </div>
+                      <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                        <label className="form-label">Description</label>
+                        <input className="form-input" value={planForm.description}
+                          onChange={e => setPlanForm(f => ({ ...f, description: e.target.value }))} />
+                      </div>
+                      <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                        <label className="form-label">Features (one per line)</label>
+                        <textarea className="form-input" rows={4} value={planForm.features}
+                          onChange={e => setPlanForm(f => ({ ...f, features: e.target.value }))}
+                          style={{ resize: 'vertical', fontFamily: 'inherit' }} />
+                      </div>
+                      <div className="form-group" style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--font-size-sm)' }}>
+                          <input type="checkbox" checked={planForm.xirr}
+                            onChange={e => setPlanForm(f => ({ ...f, xirr: e.target.checked }))} />
+                          XIRR Calculations
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--font-size-sm)' }}>
+                          <input type="checkbox" checked={planForm.pdfExport}
+                            onChange={e => setPlanForm(f => ({ ...f, pdfExport: e.target.checked }))} />
+                          PDF Export
+                        </label>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
+                      <button className="btn btn-primary" disabled={savingPlan}
+                        onClick={async () => {
+                          setSavingPlan(true);
+                          setError('');
+                          const updated = pricingPlans.map(p => {
+                            if (p.id !== plan.id) return p;
+                            return {
+                              ...p,
+                              name: planForm.name,
+                              price: parseFloat(planForm.price) || 0,
+                              currency: planForm.currency,
+                              interval: planForm.interval,
+                              description: planForm.description,
+                              statements: parseInt(planForm.statements) || 0,
+                              maxRows: parseInt(planForm.maxRows) || 0,
+                              xirr: planForm.xirr,
+                              pdfExport: planForm.pdfExport,
+                              features: planForm.features.split('\n').map(f => f.trim()).filter(Boolean),
+                            };
+                          });
+                          const res = await savePlans(updated);
+                          if (res.success) {
+                            setPricingPlans(res.plans);
+                            setEditingPlan(null);
+                            setActionMsg(`${planForm.name} plan updated.`);
+                          } else setError(res.error);
+                          setSavingPlan(false);
+                        }}>
+                        {savingPlan ? 'Saving...' : 'Save Changes'}
+                      </button>
+                      <button className="btn btn-outline" onClick={() => setEditingPlan(null)}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+                        <strong style={{ fontSize: '1.1rem' }}>{plan.name}</strong>
+                        <span style={{
+                          padding: '2px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 700,
+                          background: plan.price === 0 ? 'rgba(136, 136, 136, 0.12)' : 'rgba(132, 88, 163, 0.12)',
+                          color: plan.price === 0 ? 'var(--color-text-muted)' : 'var(--color-primary)',
+                        }}>
+                          {plan.price === 0 ? 'Free' : `$${plan.price}/${plan.interval === 'year' ? 'yr' : 'mo'}`}
+                        </span>
+                      </div>
+                      {plan.description && (
+                        <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)', marginBottom: '8px' }}>
+                          {plan.description}
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: '16px', fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
+                        <span>Statements: {plan.statements === 0 ? 'Unlimited' : plan.statements}</span>
+                        <span>Max Rows: {plan.maxRows === 0 ? 'Unlimited' : plan.maxRows?.toLocaleString()}</span>
+                        <span>XIRR: {plan.xirr ? 'Yes' : 'No'}</span>
+                        <span>PDF: {plan.pdfExport ? 'Yes' : 'No'}</span>
+                      </div>
+                      {plan.features && plan.features.length > 0 && (
+                        <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {plan.features.map((f, fi) => (
+                            <span key={fi} style={{
+                              padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem',
+                              background: 'var(--color-bg)', border: '1px solid var(--color-border)',
+                            }}>{f}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      className="btn btn-sm btn-outline"
+                      onClick={() => {
+                        setEditingPlan(plan.id);
+                        setPlanForm({
+                          id: plan.id,
+                          name: plan.name,
+                          price: String(plan.price),
+                          currency: plan.currency || 'USD',
+                          interval: plan.interval || 'month',
+                          description: plan.description || '',
+                          features: (plan.features || []).join('\n'),
+                          statements: String(plan.statements || 0),
+                          maxRows: String(plan.maxRows || 0),
+                          xirr: !!plan.xirr,
+                          pdfExport: !!plan.pdfExport,
+                        });
+                      }}
+                      style={{ padding: '4px 14px', fontSize: '0.8rem' }}
+                    >
+                      Edit
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -1206,6 +1481,155 @@ export default function AdminPage() {
           <p style={{ marginTop: '8px', fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)' }}>
             These rates are used for auto-detection when a bank statement is uploaded. Banks are sourced from CBK's list of licensed institutions.
           </p>
+        </div>
+      )}
+
+      {/* Stripe Configuration Modal */}
+      {showStripeConfig && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 1000,
+        }} onClick={() => setShowStripeConfig(false)}>
+          <div className="glass-card" style={{ padding: '32px', minWidth: '500px', maxWidth: '600px' }}
+               onClick={e => e.stopPropagation()}>
+            <h3 style={{ marginBottom: '20px' }}>Configure Stripe</h3>
+            <div style={{ display: 'grid', gap: '12px' }}>
+              <div className="form-group">
+                <label className="form-label">Publishable Key</label>
+                <input className="form-input" placeholder="pk_live_... or pk_test_..."
+                  value={stripeForm.publishableKey}
+                  onChange={e => setStripeForm(f => ({ ...f, publishableKey: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Secret Key</label>
+                <input className="form-input" type="password" placeholder="sk_live_..."
+                  value={stripeForm.secretKey}
+                  onChange={e => setStripeForm(f => ({ ...f, secretKey: e.target.value }))} />
+                <small style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)' }}>
+                  Stored securely. Only the last 4 characters are shown after saving.
+                </small>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="form-group">
+                  <label className="form-label">Basic Plan Price ID</label>
+                  <input className="form-input" placeholder="price_..."
+                    value={stripeForm.basicPriceId}
+                    onChange={e => setStripeForm(f => ({ ...f, basicPriceId: e.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Pro Plan Price ID</label>
+                  <input className="form-input" placeholder="price_..."
+                    value={stripeForm.proPriceId}
+                    onChange={e => setStripeForm(f => ({ ...f, proPriceId: e.target.value }))} />
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Webhook Secret</label>
+                <input className="form-input" type="password" placeholder="whsec_..."
+                  value={stripeForm.webhookSecret}
+                  onChange={e => setStripeForm(f => ({ ...f, webhookSecret: e.target.value }))} />
+                <small style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)' }}>
+                  Used to verify Stripe webhook signatures.
+                </small>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '20px', justifyContent: 'flex-end' }}>
+              <button className="btn btn-outline" onClick={() => setShowStripeConfig(false)}>Cancel</button>
+              <button className="btn btn-primary" disabled={savingStripe}
+                onClick={async () => {
+                  setSavingStripe(true);
+                  setError('');
+                  const res = await saveIntegrationConfig('stripe', stripeForm);
+                  if (res.success) {
+                    setStripeConfigured(res.configured);
+                    setStripeConfig(res.config);
+                    setShowStripeConfig(false);
+                    setActionMsg('Stripe configuration saved.');
+                  } else setError(res.error);
+                  setSavingStripe(false);
+                }}>
+                {savingStripe ? 'Saving...' : 'Save Configuration'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* M-Pesa Configuration Modal */}
+      {showMpesaConfig && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 1000,
+        }} onClick={() => setShowMpesaConfig(false)}>
+          <div className="glass-card" style={{ padding: '32px', minWidth: '500px', maxWidth: '600px' }}
+               onClick={e => e.stopPropagation()}>
+            <h3 style={{ marginBottom: '20px' }}>Configure M-Pesa</h3>
+            <div style={{ display: 'grid', gap: '12px' }}>
+              <div className="form-group">
+                <label className="form-label">Consumer Key</label>
+                <input className="form-input" type="password" placeholder="From Daraja portal"
+                  value={mpesaForm.consumerKey}
+                  onChange={e => setMpesaForm(f => ({ ...f, consumerKey: e.target.value }))} />
+                <small style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)' }}>
+                  Stored securely. Only the last 4 characters are shown after saving.
+                </small>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Consumer Secret</label>
+                <input className="form-input" type="password" placeholder="From Daraja portal"
+                  value={mpesaForm.consumerSecret}
+                  onChange={e => setMpesaForm(f => ({ ...f, consumerSecret: e.target.value }))} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="form-group">
+                  <label className="form-label">Shortcode (Paybill/Till)</label>
+                  <input className="form-input" placeholder="e.g. 174379"
+                    value={mpesaForm.shortcode}
+                    onChange={e => setMpesaForm(f => ({ ...f, shortcode: e.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Environment</label>
+                  <select className="form-input" value={mpesaForm.environment}
+                    onChange={e => setMpesaForm(f => ({ ...f, environment: e.target.value }))}>
+                    <option value="sandbox">Sandbox</option>
+                    <option value="production">Production</option>
+                  </select>
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Passkey</label>
+                <input className="form-input" type="password" placeholder="STK Push passkey"
+                  value={mpesaForm.passkey}
+                  onChange={e => setMpesaForm(f => ({ ...f, passkey: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Callback URL</label>
+                <input className="form-input" placeholder="https://api.ikocfo.com/mpesa/callback"
+                  value={mpesaForm.callbackUrl}
+                  onChange={e => setMpesaForm(f => ({ ...f, callbackUrl: e.target.value }))} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '20px', justifyContent: 'flex-end' }}>
+              <button className="btn btn-outline" onClick={() => setShowMpesaConfig(false)}>Cancel</button>
+              <button className="btn btn-primary" disabled={savingMpesa}
+                onClick={async () => {
+                  setSavingMpesa(true);
+                  setError('');
+                  const res = await saveIntegrationConfig('mpesa', mpesaForm);
+                  if (res.success) {
+                    setMpesaConfigured(res.configured);
+                    setMpesaConfig(res.config);
+                    setShowMpesaConfig(false);
+                    setActionMsg('M-Pesa configuration saved.');
+                  } else setError(res.error);
+                  setSavingMpesa(false);
+                }}>
+                {savingMpesa ? 'Saving...' : 'Save Configuration'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

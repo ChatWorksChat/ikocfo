@@ -1,13 +1,26 @@
-import { useState } from 'react';
-import { getCurrentUser } from '../lib/auth.js';
+import { useState, useEffect } from 'react';
+import { getCurrentUser, fetchPlans } from '../lib/auth.js';
 import { PLANS } from '../lib/constants.js';
-import { redirectToCheckout, isStripeConfigured } from '../lib/stripe.js';
+import { redirectToCheckout, loadStripeConfig, isStripeConfigured } from '../lib/stripe.js';
 import { upgradeUserPlan } from '../lib/auth.js';
 import PricingCard from '../components/PricingCard.jsx';
+
+const DEFAULT_PLANS = [PLANS.free, PLANS.basic, PLANS.pro];
 
 export default function PricingPage() {
   const user = getCurrentUser();
   const [error, setError] = useState('');
+  const [plans, setPlans] = useState(DEFAULT_PLANS);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    Promise.all([loadStripeConfig(), fetchPlans()]).then(([, plansRes]) => {
+      if (plansRes.success && plansRes.plans.length > 0) {
+        setPlans(plansRes.plans);
+      }
+      setLoading(false);
+    });
+  }, []);
 
   async function handleSubscribe(planId) {
     if (!user) {
@@ -29,8 +42,6 @@ export default function PricingPage() {
     }
   }
 
-  const plans = [PLANS.free, PLANS.basic, PLANS.pro];
-
   return (
     <div className="page-container-wide">
       <div style={{ textAlign: 'center', marginBottom: '48px' }}>
@@ -42,17 +53,21 @@ export default function PricingPage() {
 
       {error && <div className="alert alert-error" style={{ maxWidth: '600px', margin: '0 auto 24px' }}>{error}</div>}
 
-      <div className="pricing-grid">
-        {plans.map(plan => (
-          <PricingCard
-            key={plan.id}
-            plan={plan}
-            featured={plan.id === 'basic'}
-            currentPlan={user?.plan || 'free'}
-            onSubscribe={handleSubscribe}
-          />
-        ))}
-      </div>
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '48px', color: 'var(--color-text-muted)' }}>Loading plans...</div>
+      ) : (
+        <div className="pricing-grid">
+          {plans.map(plan => (
+            <PricingCard
+              key={plan.id}
+              plan={plan}
+              featured={plan.id === 'basic'}
+              currentPlan={user?.plan || 'free'}
+              onSubscribe={handleSubscribe}
+            />
+          ))}
+        </div>
+      )}
 
       <div style={{ textAlign: 'center', marginTop: '48px', color: 'var(--color-text-muted)', fontSize: 'var(--font-size-sm)' }}>
         <p>All plans include cost-ratio analysis, column auto-detection, and regulatory checks.</p>
