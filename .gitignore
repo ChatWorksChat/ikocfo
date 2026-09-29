@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Lambda deployment packages
+lambda/*/package/
+lambda/*/function.zip

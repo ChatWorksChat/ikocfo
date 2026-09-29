@@ -137,7 +137,68 @@ export async function getMfaStatus(email) {
   try {
     const data = await apiCall('/auth/mfa/status', { email });
     if (data.error) return { success: false, error: data.error };
-    return { success: true, totpEnabled: data.totpEnabled, recoveryCodesRemaining: data.recoveryCodesRemaining };
+    return {
+      success: true,
+      totpEnabled: data.totpEnabled,
+      webauthnEnabled: data.webauthnEnabled,
+      webauthnCredentials: data.webauthnCredentials || [],
+      recoveryCodesRemaining: data.recoveryCodesRemaining,
+    };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+// --- WebAuthn API calls ---
+
+export async function getWebAuthnRegisterOptions(email) {
+  try {
+    const data = await apiCall('/auth/mfa/webauthn/register-options', { email });
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, options: data };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+export async function verifyWebAuthnRegistration(email, credential, friendlyName) {
+  try {
+    const data = await apiCall('/auth/mfa/webauthn/register-verify', { email, credential, friendlyName });
+    if (data.error) return { success: false, error: data.error };
+    const session = getSession();
+    if (session) setSession({ ...session, mfaEnabled: true });
+    return { success: true, credentialId: data.credentialId, recoveryCodes: data.recoveryCodes };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+export async function getWebAuthnAuthOptions(mfaToken) {
+  try {
+    const data = await apiCall('/auth/mfa/webauthn/auth-options', { mfaToken });
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, options: data };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+export async function verifyWebAuthnAuth(mfaToken, credential) {
+  try {
+    const data = await apiCall('/auth/mfa/webauthn/auth-verify', { mfaToken, credential });
+    if (data.error) return { success: false, error: data.error };
+    setSession(data.user);
+    return { success: true, user: data.user };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+export async function removeWebAuthnCredential(email, credentialId, password) {
+  try {
+    const data = await apiCall('/auth/mfa/webauthn/remove', { email, credentialId, password });
+    if (data.error) return { success: false, error: data.error };
+    return { success: true };
   } catch {
     return { success: false, error: 'Unable to connect to server. Please try again.' };
   }

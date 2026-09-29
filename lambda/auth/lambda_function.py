@@ -1,9 +1,9 @@
 """
 IKO CFO Auth & Admin API — Lambda handler
 Endpoints: /auth/register, /auth/verify, /auth/login, /auth/resend
-           /auth/mfa/* (TOTP setup, verify, disable, recovery codes)
+           /auth/mfa/* (TOTP, WebAuthn, recovery codes)
            /admin/users, /admin/users/{email}/status, /admin/users/{email}/role
-           /admin/stats, /admin/send-credentials
+           /admin/stats, /admin/send-credentials, /admin/send-mfa-reminders
 """
 
 import json
@@ -22,12 +22,35 @@ from urllib.parse import unquote
 import boto3
 from botocore.exceptions import ClientError
 
+from webauthn import (
+    generate_registration_options,
+    verify_registration_response,
+    generate_authentication_options,
+    verify_authentication_response,
+    options_to_json,
+    base64url_to_bytes,
+)
+from webauthn.helpers import bytes_to_base64url
+from webauthn.helpers.structs import (
+    AuthenticatorSelectionCriteria,
+    UserVerificationRequirement,
+    ResidentKeyRequirement,
+    AuthenticatorAttachment,
+    PublicKeyCredentialDescriptor,
+    AuthenticatorTransport,
+)
+
 # --- Configuration ---
 
 TABLE_NAME = os.environ.get('DYNAMODB_TABLE', 'ikocfo-users')
 SES_SENDER = os.environ.get('SES_SENDER', 'administrator@forwardsflow.com')
 SES_REGION = os.environ.get('SES_REGION', 'eu-west-1')
 PASSWORD_SALT = os.environ.get('PASSWORD_SALT', 'ikocfo-salt-2024')
+
+# WebAuthn configuration — env-overridable for local dev
+WEBAUTHN_RP_ID = os.environ.get('WEBAUTHN_RP_ID', 'ikocfo.com')
+WEBAUTHN_RP_NAME = os.environ.get('WEBAUTHN_RP_NAME', 'IKO CFO')
+WEBAUTHN_ORIGIN = os.environ.get('WEBAUTHN_ORIGIN', 'https://ikocfo.com')
 
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME)
@@ -320,6 +343,8 @@ def handle_verify(body):
 
 def build_user_data(user):
     """Build safe user data dict (no sensitive fields)."""
+    has_totp = bool(user.get('mfaTotpEnabled'))
+    has_webauthn = len(user.get('webauthnCredentials', [])) > 0
     return {
         'email': user['email'],
         'firstName': user.get('firstName', ''),
@@ -333,7 +358,7 @@ def build_user_data(user):
         'role': user.get('role', 'user'),
         'status': user.get('status', 'active'),
         'createdAt': user.get('createdAt', ''),
-        'mfaEnabled': bool(user.get('mfaTotpEnabled')),
+        'mfaEnabled': has_totp or has_webauthn,
     }
 
 
@@ -363,13 +388,21 @@ def handle_login(body):
     if user.get('status') == 'disabled':
         return response(403, {'error': 'Your account has been disabled. Please contact support.'})
 
-    # Check if MFA is enabled
-    if user.get('mfaTotpEnabled'):
+    # Check if MFA is enabled (TOTP or WebAuthn)
+    has_totp = bool(user.get('mfaTotpEnabled'))
+    has_webauthn = len(user.get('webauthnCredentials', [])) > 0
+
+    if has_totp or has_webauthn:
+        methods = []
+        if has_totp:
+            methods.append('totp')
+        if has_webauthn:
+            methods.append('webauthn')
         mfa_token = create_mfa_token(email)
         return response(200, {
             'mfaRequired': True,
             'mfaToken': mfa_token,
-            'methods': ['totp'],
+            'methods': methods,
         })
 
     # Update last login
@@ -383,7 +416,8 @@ def handle_login(body):
 
     # Prompt MFA setup for users who haven't been prompted yet
     mfa_setup_required = (
-        not user.get('mfaTotpEnabled')
+        not has_totp
+        and not has_webauthn
         and not user.get('mfaPromptedAt')
     )
     if mfa_setup_required:
@@ -745,9 +779,16 @@ def handle_mfa_status(body):
 
     user = result['Item']
     recovery_count = len(user.get('mfaRecoveryCodes', []))
+    webauthn_creds = user.get('webauthnCredentials', [])
+    webauthn_list = [
+        {'id': c['credentialId'], 'name': c.get('friendlyName', 'Fingerprint'), 'createdAt': c.get('createdAt', '')}
+        for c in webauthn_creds
+    ]
 
     return response(200, {
         'totpEnabled': bool(user.get('mfaTotpEnabled')),
+        'webauthnEnabled': len(webauthn_creds) > 0,
+        'webauthnCredentials': webauthn_list,
         'recoveryCodesRemaining': recovery_count,
     })
 
@@ -785,6 +826,366 @@ def handle_mfa_recovery_regenerate(body):
     )
 
     return response(200, {'recoveryCodes': recovery_codes})
+
+
+# --- WebAuthn Handlers ---
+
+def handle_webauthn_register_options(body):
+    """Generate WebAuthn registration options (triggers browser fingerprint/security key prompt)."""
+    email = (body.get('email') or '').lower().strip()
+    if not email:
+        return response(400, {'error': 'Email is required.'})
+
+    try:
+        result = table.get_item(Key={'email': email})
+    except ClientError:
+        return response(500, {'error': 'Database error.'})
+
+    if 'Item' not in result:
+        return response(404, {'error': 'User not found.'})
+
+    user = result['Item']
+
+    # Generate or reuse a stable user handle
+    user_id = user.get('webauthnUserId')
+    if user_id:
+        user_id_bytes = base64url_to_bytes(user_id)
+    else:
+        user_id_bytes = secrets.token_bytes(32)
+        user_id = bytes_to_base64url(user_id_bytes)
+
+    # Build exclude list from existing credentials
+    existing_creds = user.get('webauthnCredentials', [])
+    exclude = [
+        PublicKeyCredentialDescriptor(id=base64url_to_bytes(c['credentialId']))
+        for c in existing_creds
+    ]
+
+    options = generate_registration_options(
+        rp_id=WEBAUTHN_RP_ID,
+        rp_name=WEBAUTHN_RP_NAME,
+        user_name=email,
+        user_id=user_id_bytes,
+        user_display_name=f"{user.get('firstName', '')} {user.get('lastName', '')}".strip() or email,
+        exclude_credentials=exclude,
+        authenticator_selection=AuthenticatorSelectionCriteria(
+            authenticator_attachment=AuthenticatorAttachment.PLATFORM,
+            resident_key=ResidentKeyRequirement.PREFERRED,
+            user_verification=UserVerificationRequirement.PREFERRED,
+        ),
+    )
+
+    # Store the challenge and user ID for verification
+    challenge_b64 = bytes_to_base64url(options.challenge)
+    table.update_item(
+        Key={'email': email},
+        UpdateExpression='SET webauthnChallenge = :c, webauthnUserId = :u',
+        ExpressionAttributeValues={':c': challenge_b64, ':u': user_id},
+    )
+
+    return response(200, json.loads(options_to_json(options)))
+
+
+def handle_webauthn_register_verify(body):
+    """Verify WebAuthn registration attestation and store credential."""
+    email = (body.get('email') or '').lower().strip()
+    credential = body.get('credential')
+    friendly_name = body.get('friendlyName', 'Fingerprint')
+
+    if not email or not credential:
+        return response(400, {'error': 'Email and credential are required.'})
+
+    try:
+        result = table.get_item(Key={'email': email})
+    except ClientError:
+        return response(500, {'error': 'Database error.'})
+
+    if 'Item' not in result:
+        return response(404, {'error': 'User not found.'})
+
+    user = result['Item']
+    challenge_b64 = user.get('webauthnChallenge')
+    if not challenge_b64:
+        return response(400, {'error': 'No registration in progress.'})
+
+    try:
+        verification = verify_registration_response(
+            credential=credential,
+            expected_challenge=base64url_to_bytes(challenge_b64),
+            expected_rp_id=WEBAUTHN_RP_ID,
+            expected_origin=WEBAUTHN_ORIGIN,
+            require_user_verification=False,
+        )
+    except Exception as e:
+        print(f'WebAuthn registration verification failed: {e}')
+        return response(400, {'error': f'Registration verification failed: {str(e)}'})
+
+    # Store the credential
+    new_cred = {
+        'credentialId': bytes_to_base64url(verification.credential_id),
+        'publicKey': bytes_to_base64url(verification.credential_public_key),
+        'counter': verification.sign_count,
+        'friendlyName': friendly_name,
+        'createdAt': now_iso(),
+    }
+
+    existing_creds = user.get('webauthnCredentials', [])
+    existing_creds.append(new_cred)
+
+    # Generate recovery codes if this is the first MFA method
+    has_totp = bool(user.get('mfaTotpEnabled'))
+    has_existing_codes = len(user.get('mfaRecoveryCodes', [])) > 0
+    recovery_codes = None
+
+    update_expr = 'SET webauthnCredentials = :wc, webauthnChallenge = :n'
+    expr_values = {':wc': existing_creds, ':n': None}
+
+    if not has_totp and not has_existing_codes:
+        recovery_codes = generate_recovery_codes()
+        hashed_codes = [hash_recovery_code(c) for c in recovery_codes]
+        update_expr += ', mfaRecoveryCodes = :rc, mfaRecoveryCodesGeneratedAt = :rg'
+        expr_values[':rc'] = hashed_codes
+        expr_values[':rg'] = now_iso()
+
+    table.update_item(
+        Key={'email': email},
+        UpdateExpression=update_expr,
+        ExpressionAttributeValues=expr_values,
+    )
+
+    resp = {'registered': True, 'credentialId': new_cred['credentialId']}
+    if recovery_codes:
+        resp['recoveryCodes'] = recovery_codes
+    return response(200, resp)
+
+
+def handle_webauthn_auth_options(body):
+    """Generate WebAuthn authentication options (for MFA challenge during login)."""
+    mfa_token = body.get('mfaToken', '')
+    if not mfa_token:
+        return response(400, {'error': 'MFA token is required.'})
+
+    email = verify_mfa_token(mfa_token)
+    if not email:
+        return response(401, {'error': 'MFA session expired. Please log in again.'})
+
+    try:
+        result = table.get_item(Key={'email': email})
+    except ClientError:
+        return response(500, {'error': 'Database error.'})
+
+    if 'Item' not in result:
+        return response(404, {'error': 'User not found.'})
+
+    user = result['Item']
+    creds = user.get('webauthnCredentials', [])
+    if not creds:
+        return response(400, {'error': 'No WebAuthn credentials registered.'})
+
+    allow = [
+        PublicKeyCredentialDescriptor(id=base64url_to_bytes(c['credentialId']))
+        for c in creds
+    ]
+
+    options = generate_authentication_options(
+        rp_id=WEBAUTHN_RP_ID,
+        allow_credentials=allow,
+        user_verification=UserVerificationRequirement.PREFERRED,
+    )
+
+    challenge_b64 = bytes_to_base64url(options.challenge)
+    table.update_item(
+        Key={'email': email},
+        UpdateExpression='SET webauthnChallenge = :c',
+        ExpressionAttributeValues={':c': challenge_b64},
+    )
+
+    return response(200, json.loads(options_to_json(options)))
+
+
+def handle_webauthn_auth_verify(body):
+    """Verify WebAuthn authentication assertion during login."""
+    mfa_token = body.get('mfaToken', '')
+    credential = body.get('credential')
+
+    if not mfa_token or not credential:
+        return response(400, {'error': 'MFA token and credential are required.'})
+
+    email = verify_mfa_token(mfa_token)
+    if not email:
+        return response(401, {'error': 'MFA session expired. Please log in again.'})
+
+    try:
+        result = table.get_item(Key={'email': email})
+    except ClientError:
+        return response(500, {'error': 'Database error.'})
+
+    if 'Item' not in result:
+        return response(404, {'error': 'User not found.'})
+
+    user = result['Item']
+    challenge_b64 = user.get('webauthnChallenge')
+    if not challenge_b64:
+        return response(400, {'error': 'No authentication challenge found.'})
+
+    # Find the matching credential
+    cred_id = credential.get('id', '')
+    stored_creds = user.get('webauthnCredentials', [])
+    matched_cred = None
+    matched_idx = None
+    for idx, c in enumerate(stored_creds):
+        if c['credentialId'] == cred_id:
+            matched_cred = c
+            matched_idx = idx
+            break
+
+    if not matched_cred:
+        return response(400, {'error': 'Credential not recognized.'})
+
+    try:
+        verification = verify_authentication_response(
+            credential=credential,
+            expected_challenge=base64url_to_bytes(challenge_b64),
+            expected_rp_id=WEBAUTHN_RP_ID,
+            expected_origin=WEBAUTHN_ORIGIN,
+            credential_public_key=base64url_to_bytes(matched_cred['publicKey']),
+            credential_current_sign_count=int(matched_cred.get('counter', 0)),
+            require_user_verification=False,
+        )
+    except Exception as e:
+        print(f'WebAuthn authentication verification failed: {e}')
+        return response(400, {'error': 'Fingerprint verification failed. Please try again.'})
+
+    # Update counter and last login
+    stored_creds[matched_idx]['counter'] = verification.new_sign_count
+    table.update_item(
+        Key={'email': email},
+        UpdateExpression='SET webauthnCredentials = :wc, webauthnChallenge = :n, lastLoginAt = :t',
+        ExpressionAttributeValues={':wc': stored_creds, ':n': None, ':t': now_iso()},
+    )
+
+    return response(200, {'user': build_user_data(user)})
+
+
+def handle_webauthn_remove(body):
+    """Remove a WebAuthn credential."""
+    email = (body.get('email') or '').lower().strip()
+    credential_id = body.get('credentialId', '')
+    password = body.get('password', '')
+
+    if not email or not credential_id or not password:
+        return response(400, {'error': 'Email, credentialId, and password are required.'})
+
+    try:
+        result = table.get_item(Key={'email': email})
+    except ClientError:
+        return response(500, {'error': 'Database error.'})
+
+    if 'Item' not in result:
+        return response(404, {'error': 'User not found.'})
+
+    user = result['Item']
+    if user.get('password_hash') != hash_password(password):
+        return response(401, {'error': 'Incorrect password.'})
+
+    stored_creds = user.get('webauthnCredentials', [])
+    updated_creds = [c for c in stored_creds if c['credentialId'] != credential_id]
+
+    if len(updated_creds) == len(stored_creds):
+        return response(404, {'error': 'Credential not found.'})
+
+    table.update_item(
+        Key={'email': email},
+        UpdateExpression='SET webauthnCredentials = :wc',
+        ExpressionAttributeValues={':wc': updated_creds},
+    )
+
+    return response(200, {'removed': True})
+
+
+# --- MFA Reminder Email ---
+
+def send_mfa_reminder_email(email, first_name):
+    """Send MFA setup reminder email."""
+    subject = 'IKO CFO — Secure Your Account with Two-Factor Authentication'
+    name = first_name or 'there'
+    body = f"""Hi {name},
+
+We've added two-factor authentication (2FA) to IKO CFO to help keep your account secure.
+
+You can now protect your account with:
+- Google Authenticator (or any TOTP app)
+- Fingerprint / Windows Hello / Touch ID
+
+Set up 2FA now by logging in and visiting your Security Settings.
+
+Log in: https://ikocfo.com/login
+
+After logging in, you'll be prompted to set up 2FA, or you can go to Settings > Security at any time.
+
+— IKO CFO Team
+"""
+    html = f"""
+<div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px;">
+  <h2 style="color: #8458a3;">IKO CFO</h2>
+  <p>Hi {name},</p>
+  <p>We've added <strong>two-factor authentication (2FA)</strong> to IKO CFO to help keep your account secure.</p>
+  <div style="background: #f9f9ff; border-radius: 8px; padding: 20px; margin: 20px 0;">
+    <p style="margin: 0 0 8px;"><strong>You can now protect your account with:</strong></p>
+    <ul style="margin: 0; padding-left: 20px;">
+      <li>Google Authenticator (or any TOTP app)</li>
+      <li>Fingerprint / Windows Hello / Touch ID</li>
+    </ul>
+  </div>
+  <div style="text-align: center; margin: 24px 0;">
+    <a href="https://ikocfo.com/login" style="display: inline-block; padding: 14px 32px; background: #8458a3; color: #fff; text-decoration: none; border-radius: 6px; font-weight: bold;">
+      Set Up 2FA Now
+    </a>
+  </div>
+  <p style="color: #666; font-size: 13px;">After logging in, you'll be prompted to set up 2FA, or you can visit Settings &gt; Security at any time.</p>
+  <p style="color: #999; font-size: 12px;">— IKO CFO Team</p>
+</div>
+"""
+    return send_email(email, subject, body, html)
+
+
+def handle_send_mfa_reminders(body):
+    """Send MFA setup reminder emails to all active users without MFA."""
+    try:
+        result = table.scan()
+        items = result.get('Items', [])
+    except ClientError as e:
+        return response(500, {'error': str(e)})
+
+    sent = 0
+    failed = 0
+    errors = []
+
+    for item in items:
+        if not item.get('verified'):
+            continue
+        if item.get('status') == 'disabled':
+            continue
+        if item.get('mfaTotpEnabled'):
+            continue
+        if len(item.get('webauthnCredentials', [])) > 0:
+            continue
+
+        email = item['email']
+        first_name = item.get('firstName', '')
+        ok = send_mfa_reminder_email(email, first_name)
+        if ok:
+            sent += 1
+        else:
+            failed += 1
+            errors.append(email)
+
+    return response(200, {
+        'sent': sent,
+        'failed': failed,
+        'errors': errors,
+        'message': f'MFA reminders sent: {sent} succeeded, {failed} failed.',
+    })
 
 
 # --- Main Handler ---
@@ -836,6 +1237,22 @@ def lambda_handler(event, context):
     if method == 'POST' and path == '/auth/mfa/recovery-codes/regenerate':
         return handle_mfa_recovery_regenerate(body)
 
+    # --- WebAuthn routes ---
+    if method == 'POST' and path == '/auth/mfa/webauthn/register-options':
+        return handle_webauthn_register_options(body)
+
+    if method == 'POST' and path == '/auth/mfa/webauthn/register-verify':
+        return handle_webauthn_register_verify(body)
+
+    if method == 'POST' and path == '/auth/mfa/webauthn/auth-options':
+        return handle_webauthn_auth_options(body)
+
+    if method == 'POST' and path == '/auth/mfa/webauthn/auth-verify':
+        return handle_webauthn_auth_verify(body)
+
+    if method == 'POST' and path == '/auth/mfa/webauthn/remove':
+        return handle_webauthn_remove(body)
+
     # --- Admin routes ---
     if method == 'GET' and path == '/admin/users':
         return handle_admin_users()
@@ -845,6 +1262,9 @@ def lambda_handler(event, context):
 
     if method == 'POST' and path == '/admin/send-credentials':
         return handle_send_credentials(body)
+
+    if method == 'POST' and path == '/admin/send-mfa-reminders':
+        return handle_send_mfa_reminders(body)
 
     # /admin/users/{email}/status
     if method == 'PUT' and '/admin/users/' in path and path.endswith('/status'):

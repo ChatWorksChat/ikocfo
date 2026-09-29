@@ -1,13 +1,21 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
-import { getCurrentUser, setupTotp, verifyTotpSetup } from '../lib/auth.js';
+import { startRegistration } from '@simplewebauthn/browser';
+import {
+  getCurrentUser,
+  setupTotp,
+  verifyTotpSetup,
+  getWebAuthnRegisterOptions,
+  verifyWebAuthnRegistration,
+} from '../lib/auth.js';
 
 export default function MfaSetupPage() {
   const navigate = useNavigate();
   const user = getCurrentUser();
 
-  const [step, setStep] = useState(1); // 1=intro, 2=qr, 3=recovery, 4=done
+  // Steps: 'choose' | 'totp-qr' | 'webauthn' | 'recovery' | 'done'
+  const [step, setStep] = useState('choose');
   const [secret, setSecret] = useState('');
   const [otpauthUri, setOtpauthUri] = useState('');
   const [code, setCode] = useState('');
@@ -21,7 +29,8 @@ export default function MfaSetupPage() {
     return null;
   }
 
-  async function handleStartSetup() {
+  // --- TOTP Flow ---
+  async function handleStartTotp() {
     setError('');
     setLoading(true);
     const result = await setupTotp(user.email);
@@ -30,13 +39,13 @@ export default function MfaSetupPage() {
     if (result.success) {
       setSecret(result.secret);
       setOtpauthUri(result.otpauthUri);
-      setStep(2);
+      setStep('totp-qr');
     } else {
       setError(result.error);
     }
   }
 
-  async function handleVerifyCode(e) {
+  async function handleVerifyTotp(e) {
     e.preventDefault();
     setError('');
 
@@ -52,12 +61,59 @@ export default function MfaSetupPage() {
 
     if (result.success) {
       setRecoveryCodes(result.recoveryCodes);
-      setStep(3);
+      setStep('recovery');
     } else {
       setError(result.error);
     }
   }
 
+  // --- WebAuthn Flow ---
+  async function handleStartWebAuthn() {
+    setError('');
+    setLoading(true);
+
+    try {
+      const optResult = await getWebAuthnRegisterOptions(user.email);
+      if (!optResult.success) {
+        setError(optResult.error);
+        setLoading(false);
+        return;
+      }
+
+      // Trigger the browser's fingerprint/security key registration prompt
+      const regResponse = await startRegistration({ optionsJSON: optResult.options });
+
+      // Verify with server
+      const verifyResult = await verifyWebAuthnRegistration(
+        user.email,
+        regResponse,
+        'Fingerprint',
+      );
+      setLoading(false);
+
+      if (verifyResult.success) {
+        if (verifyResult.recoveryCodes) {
+          setRecoveryCodes(verifyResult.recoveryCodes);
+          setStep('recovery');
+        } else {
+          setStep('done');
+        }
+      } else {
+        setError(verifyResult.error);
+      }
+    } catch (err) {
+      setLoading(false);
+      if (err.name === 'NotAllowedError') {
+        setError('Registration was cancelled. Please try again.');
+      } else if (err.name === 'InvalidStateError') {
+        setError('This device is already registered.');
+      } else {
+        setError(`Registration failed: ${err.message}`);
+      }
+    }
+  }
+
+  // --- Recovery codes ---
   function handleCopyCodes() {
     navigator.clipboard.writeText(recoveryCodes.join('\n'));
   }
@@ -73,30 +129,76 @@ export default function MfaSetupPage() {
     URL.revokeObjectURL(url);
   }
 
-  // Step 1: Introduction
-  if (step === 1) {
+  // --- Step: Choose Method ---
+  if (step === 'choose') {
     return (
       <div className="page-container-narrow">
         <div className="auth-card glass-card">
           <h1>Set Up Two-Factor Authentication</h1>
-          <p>Add an extra layer of security to your account using an authenticator app.</p>
+          <p>Choose a method to add an extra layer of security to your account.</p>
 
           {error && <div className="alert alert-error">{error}</div>}
 
-          <div style={{ background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', padding: '20px', marginBottom: '24px', fontSize: 'var(--font-size-sm)', color: 'var(--color-text-light)' }}>
-            <strong style={{ color: 'var(--color-text)', display: 'block', marginBottom: '8px' }}>You will need:</strong>
-            <ul style={{ paddingLeft: '20px', margin: 0, lineHeight: '2' }}>
-              <li>Google Authenticator, Authy, or similar app</li>
-              <li>Your phone or device with the app installed</li>
-            </ul>
-          </div>
-
+          {/* Fingerprint / Windows Hello / Touch ID */}
           <button
-            className="btn btn-primary btn-lg"
-            onClick={handleStartSetup}
+            onClick={handleStartWebAuthn}
             disabled={loading}
+            style={{
+              width: '100%',
+              padding: '20px',
+              background: 'var(--color-bg)',
+              border: '2px solid var(--color-border)',
+              borderRadius: 'var(--radius-sm)',
+              cursor: 'pointer',
+              textAlign: 'left',
+              marginBottom: '12px',
+              transition: 'border-color 0.2s',
+            }}
+            onMouseOver={e => e.currentTarget.style.borderColor = 'var(--color-primary)'}
+            onMouseOut={e => e.currentTarget.style.borderColor = 'var(--color-border)'}
           >
-            {loading ? 'Setting up...' : 'Get Started'}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <span style={{ fontSize: '32px' }}>&#128270;</span>
+              <div>
+                <strong style={{ display: 'block', fontSize: 'var(--font-size-base)' }}>
+                  {loading ? 'Waiting for device...' : 'Fingerprint / Windows Hello / Touch ID'}
+                </strong>
+                <span style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)' }}>
+                  Use your device's built-in biometric authentication
+                </span>
+              </div>
+            </div>
+          </button>
+
+          {/* Google Authenticator / TOTP */}
+          <button
+            onClick={handleStartTotp}
+            disabled={loading}
+            style={{
+              width: '100%',
+              padding: '20px',
+              background: 'var(--color-bg)',
+              border: '2px solid var(--color-border)',
+              borderRadius: 'var(--radius-sm)',
+              cursor: 'pointer',
+              textAlign: 'left',
+              marginBottom: '24px',
+              transition: 'border-color 0.2s',
+            }}
+            onMouseOver={e => e.currentTarget.style.borderColor = 'var(--color-primary)'}
+            onMouseOut={e => e.currentTarget.style.borderColor = 'var(--color-border)'}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <span style={{ fontSize: '32px' }}>&#128241;</span>
+              <div>
+                <strong style={{ display: 'block', fontSize: 'var(--font-size-base)' }}>
+                  Google Authenticator / TOTP App
+                </strong>
+                <span style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)' }}>
+                  Use Google Authenticator, Authy, or similar app
+                </span>
+              </div>
+            </div>
           </button>
 
           <div className="auth-link">
@@ -113,8 +215,8 @@ export default function MfaSetupPage() {
     );
   }
 
-  // Step 2: QR Code + Verify
-  if (step === 2) {
+  // --- Step: TOTP QR Code ---
+  if (step === 'totp-qr') {
     return (
       <div className="page-container-narrow">
         <div className="auth-card glass-card">
@@ -153,7 +255,7 @@ export default function MfaSetupPage() {
             )}
           </div>
 
-          <form onSubmit={handleVerifyCode}>
+          <form onSubmit={handleVerifyTotp}>
             <div className="form-group">
               <label className="form-label" htmlFor="totp-code">Verification Code</label>
               <input
@@ -184,8 +286,8 @@ export default function MfaSetupPage() {
     );
   }
 
-  // Step 3: Recovery Codes
-  if (step === 3) {
+  // --- Step: Recovery Codes ---
+  if (step === 'recovery') {
     return (
       <div className="page-container-narrow">
         <div className="auth-card glass-card">
@@ -243,7 +345,7 @@ export default function MfaSetupPage() {
 
           <button
             className="btn btn-primary btn-lg"
-            onClick={() => setStep(4)}
+            onClick={() => setStep('done')}
           >
             I have saved my codes
           </button>
@@ -252,7 +354,7 @@ export default function MfaSetupPage() {
     );
   }
 
-  // Step 4: Done
+  // --- Step: Done ---
   return (
     <div className="page-container-narrow">
       <div className="auth-card glass-card">
