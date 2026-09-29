@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { autoDetectColumns, detectBank } from '../lib/statementMapper.js';
-import { COLUMN_TYPES, CURRENCIES, BANK_RATES } from '../lib/constants.js';
+import { COLUMN_TYPES, CURRENCIES, KENYA_BANKS } from '../lib/constants.js';
+import { fetchBankRates, addBankRate } from '../lib/auth.js';
 
 export default function StatementPreview({ parsedData, onConfirm }) {
   const { rawRows, headerRowIndex: initialHeaderRow } = parsedData;
@@ -11,6 +12,8 @@ export default function StatementPreview({ parsedData, onConfirm }) {
   const [overdraftLimit, setOverdraftLimit] = useState('');
   const [currency, setCurrency] = useState('KES');
   const [detectedBank, setDetectedBank] = useState(null);
+  const [selectedBank, setSelectedBank] = useState('');
+  const [bankRates, setBankRates] = useState([]);
   const [error, setError] = useState('');
 
   // Derive headers and data rows from rawRows + headerRowIdx
@@ -37,25 +40,35 @@ export default function StatementPreview({ parsedData, onConfirm }) {
     return { headers: h, rows: nonEmpty };
   }, [rawRows, headerRowIdx]);
 
-  // Re-run auto-detection whenever headers change
+  // Fetch bank rates from API on mount
+  useEffect(() => {
+    fetchBankRates().then(res => {
+      if (res.success) setBankRates(res.rates);
+    });
+  }, []);
+
+  // Re-run auto-detection whenever headers or bankRates change
   useEffect(() => {
     setColumnMapping(autoDetectColumns(headers));
 
-    const bank = detectBank(rows, headers, BANK_RATES);
-    if (bank) {
-      setDetectedBank(bank);
-      setNominalRate(String(bank.odAPR));
-      if (bank.currency) setCurrency(bank.currency);
-    } else {
-      setDetectedBank(null);
+    if (bankRates.length > 0) {
+      const bank = detectBank(rows, headers, bankRates);
+      if (bank) {
+        setDetectedBank(bank);
+        setSelectedBank(bank.id);
+        setNominalRate(String(bank.odAPR));
+        if (bank.currency) setCurrency(bank.currency);
+      } else {
+        setDetectedBank(null);
+      }
     }
-  }, [headers, rows]);
+  }, [headers, rows, bankRates]);
 
   function handleMappingChange(header, type) {
     setColumnMapping(prev => ({ ...prev, [header]: type }));
   }
 
-  function handleConfirm() {
+  async function handleConfirm() {
     const mappedTypes = Object.values(columnMapping);
     if (!mappedTypes.includes('date')) {
       setError('Please map at least one column as Date.');
@@ -70,12 +83,26 @@ export default function StatementPreview({ parsedData, onConfirm }) {
       return;
     }
     setError('');
+
+    // If a bank is selected but has no rate record yet, auto-create it
+    if (selectedBank && selectedBank.startsWith('new:')) {
+      const bankName = selectedBank.replace('new:', '');
+      const kenyaBank = KENYA_BANKS.find(b => b.name === bankName);
+      await addBankRate({
+        name: bankName,
+        odAPR: parseFloat(nominalRate),
+        currency,
+        country: 'Kenya',
+        aliases: [bankName],
+        type: kenyaBank?.type || 'commercial',
+      });
+    }
+
     onConfirm({
       columnMapping,
       nominalRate: parseFloat(nominalRate),
       overdraftLimit: overdraftLimit ? parseFloat(overdraftLimit) : 0,
       currency,
-      // Pass the derived headers/rows so downstream gets the right data
       resolvedHeaders: headers,
       resolvedRows: rows,
     });
@@ -250,6 +277,43 @@ export default function StatementPreview({ parsedData, onConfirm }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px' }}>
         <div className="form-group">
+          <label className="form-label">Bank</label>
+          <select
+            className="form-input"
+            value={selectedBank}
+            onChange={e => {
+              const val = e.target.value;
+              setSelectedBank(val);
+              // If selecting an existing bank rate, pre-fill the OD rate
+              if (val && !val.startsWith('new:')) {
+                const rate = bankRates.find(r => r.id === val);
+                if (rate) {
+                  setNominalRate(String(rate.odAPR));
+                  if (rate.currency) setCurrency(rate.currency);
+                }
+              }
+            }}
+          >
+            <option value="">— Select bank (optional) —</option>
+            {bankRates.length > 0 && (
+              <optgroup label="Banks with OD rates">
+                {bankRates.map(r => (
+                  <option key={r.id} value={r.id}>{r.name} ({r.odAPR}%)</option>
+                ))}
+              </optgroup>
+            )}
+            <optgroup label="Add new bank">
+              {KENYA_BANKS
+                .filter(b => !bankRates.some(r => r.name === b.name))
+                .map(b => (
+                  <option key={b.name} value={`new:${b.name}`}>{b.name}</option>
+                ))
+              }
+            </optgroup>
+          </select>
+        </div>
+
+        <div className="form-group">
           <label className="form-label">Nominal Interest Rate (%)</label>
           <input
             className="form-input"
@@ -286,6 +350,12 @@ export default function StatementPreview({ parsedData, onConfirm }) {
           </select>
         </div>
       </div>
+
+      {selectedBank && selectedBank.startsWith('new:') && nominalRate && (
+        <div className="alert alert-success" style={{ marginBottom: '16px', fontSize: 'var(--font-size-sm)' }}>
+          The OD rate for <strong>{selectedBank.replace('new:', '')}</strong> will be saved automatically when you run the analysis.
+        </div>
+      )}
 
       <button className="btn btn-primary" onClick={handleConfirm}>
         Continue to Confirmation

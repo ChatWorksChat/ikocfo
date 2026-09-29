@@ -320,6 +320,56 @@ export async function deleteUser(email) {
   }
 }
 
+// --- Bank Rates API ---
+
+async function apiDelete(path) {
+  const res = await fetch(`${API_URL}${path}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  return res.json();
+}
+
+export async function fetchBankRates() {
+  try {
+    const data = await apiGet('/admin/bank-rates');
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, rates: data.rates || [] };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
+export async function addBankRate({ name, odAPR, currency, country, aliases, type }) {
+  try {
+    const data = await apiCall('/admin/bank-rates', { name, odAPR, currency, country, aliases, type });
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, rate: data };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
+export async function updateBankRate(id, fields) {
+  try {
+    const data = await apiPut(`/admin/bank-rates/${encodeURIComponent(id)}`, fields);
+    if (data.error) return { success: false, error: data.error };
+    return { success: true };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
+export async function deleteBankRate(id) {
+  try {
+    const data = await apiDelete(`/admin/bank-rates/${encodeURIComponent(id)}`);
+    if (data.error) return { success: false, error: data.error };
+    return { success: true };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
 export async function acceptInvite(token, password) {
   try {
     const data = await apiCall('/auth/accept-invite', { token, password });

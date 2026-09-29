@@ -1446,6 +1446,160 @@ def handle_send_mfa_reminders(body):
     })
 
 
+# --- Bank Rates CRUD ---
+
+import uuid as _uuid
+
+
+def handle_get_bank_rates():
+    """Return all bank rate records from DynamoDB."""
+    try:
+        result = table.scan(
+            FilterExpression='begins_with(email, :prefix)',
+            ExpressionAttributeValues={':prefix': 'bankrate#'},
+        )
+        rates = []
+        for item in result.get('Items', []):
+            rates.append({
+                'id': item['email'].replace('bankrate#', ''),
+                'name': item.get('name', ''),
+                'aliases': json.loads(item['aliases']) if isinstance(item.get('aliases'), str) else item.get('aliases', []),
+                'odAPR': float(item.get('odAPR', 0)),
+                'currency': item.get('currency', 'KES'),
+                'country': item.get('country', 'Kenya'),
+                'type': item.get('bankType', 'commercial'),
+                'createdAt': item.get('createdAt', ''),
+                'updatedAt': item.get('updatedAt', ''),
+            })
+        rates.sort(key=lambda r: r['name'])
+        return response(200, {'rates': rates})
+    except ClientError as e:
+        print(f'DynamoDB error: {e}')
+        return response(500, {'error': 'Failed to fetch bank rates.'})
+
+
+def handle_add_bank_rate(body):
+    """Create a new bank rate record."""
+    name = (body.get('name') or '').strip()
+    od_apr = body.get('odAPR')
+    currency = body.get('currency', 'KES')
+    country = body.get('country', 'Kenya')
+    aliases = body.get('aliases', [])
+    bank_type = body.get('type', 'commercial')
+
+    if not name:
+        return response(400, {'error': 'Bank name is required.'})
+    if od_apr is None or float(od_apr) < 0:
+        return response(400, {'error': 'A valid OD APR is required.'})
+
+    rate_id = str(_uuid.uuid4())[:8]
+    now = now_iso()
+
+    # Build aliases: always include the full name and common abbreviations
+    if not aliases:
+        aliases = [name]
+    elif name not in aliases:
+        aliases.insert(0, name)
+
+    item = {
+        'email': f'bankrate#{rate_id}',
+        'name': name,
+        'aliases': json.dumps(aliases),
+        'odAPR': str(od_apr),
+        'currency': currency,
+        'country': country,
+        'bankType': bank_type,
+        'createdAt': now,
+        'updatedAt': now,
+    }
+
+    try:
+        table.put_item(Item=item)
+        return response(201, {
+            'id': rate_id,
+            'name': name,
+            'odAPR': float(od_apr),
+            'currency': currency,
+            'country': country,
+            'type': bank_type,
+            'aliases': aliases,
+            'createdAt': now,
+        })
+    except ClientError as e:
+        print(f'DynamoDB error: {e}')
+        return response(500, {'error': 'Failed to create bank rate.'})
+
+
+def handle_update_bank_rate(rate_id, body):
+    """Update an existing bank rate record."""
+    key = f'bankrate#{rate_id}'
+
+    # Verify record exists
+    try:
+        result = table.get_item(Key={'email': key})
+        if 'Item' not in result:
+            return response(404, {'error': 'Bank rate not found.'})
+    except ClientError:
+        return response(404, {'error': 'Bank rate not found.'})
+
+    update_parts = []
+    values = {}
+
+    if 'name' in body:
+        update_parts.append('#n = :name')
+        values[':name'] = body['name'].strip()
+    if 'odAPR' in body:
+        update_parts.append('odAPR = :apr')
+        values[':apr'] = str(body['odAPR'])
+    if 'currency' in body:
+        update_parts.append('currency = :cur')
+        values[':cur'] = body['currency']
+    if 'country' in body:
+        update_parts.append('country = :ctry')
+        values[':ctry'] = body['country']
+    if 'aliases' in body:
+        update_parts.append('aliases = :al')
+        values[':al'] = json.dumps(body['aliases'])
+    if 'type' in body:
+        update_parts.append('bankType = :bt')
+        values[':bt'] = body['type']
+
+    if not update_parts:
+        return response(400, {'error': 'No fields to update.'})
+
+    update_parts.append('updatedAt = :ua')
+    values[':ua'] = now_iso()
+
+    attr_names = {}
+    if '#n = :name' in update_parts:
+        attr_names['#n'] = 'name'
+
+    try:
+        kwargs = {
+            'Key': {'email': key},
+            'UpdateExpression': 'SET ' + ', '.join(update_parts),
+            'ExpressionAttributeValues': values,
+        }
+        if attr_names:
+            kwargs['ExpressionAttributeNames'] = attr_names
+        table.update_item(**kwargs)
+        return response(200, {'updated': True, 'id': rate_id})
+    except ClientError as e:
+        print(f'DynamoDB error: {e}')
+        return response(500, {'error': 'Failed to update bank rate.'})
+
+
+def handle_delete_bank_rate(rate_id):
+    """Delete a bank rate record."""
+    key = f'bankrate#{rate_id}'
+    try:
+        table.delete_item(Key={'email': key})
+        return response(200, {'deleted': True, 'id': rate_id})
+    except ClientError as e:
+        print(f'DynamoDB error: {e}')
+        return response(500, {'error': 'Failed to delete bank rate.'})
+
+
 # --- Main Handler ---
 
 def lambda_handler(event, context):
@@ -1553,5 +1707,22 @@ def lambda_handler(event, context):
         parts = path.split('/')
         email = unquote(parts[-2])
         return handle_admin_user_role(email, body)
+
+    # --- Bank rates routes ---
+    if method == 'GET' and path == '/admin/bank-rates':
+        return handle_get_bank_rates()
+
+    if method == 'POST' and path == '/admin/bank-rates':
+        return handle_add_bank_rate(body)
+
+    # PUT /admin/bank-rates/{id}
+    if method == 'PUT' and '/admin/bank-rates/' in path:
+        rate_id = path.split('/')[-1]
+        return handle_update_bank_rate(rate_id, body)
+
+    # DELETE /admin/bank-rates/{id}
+    if method == 'DELETE' and '/admin/bank-rates/' in path:
+        rate_id = path.split('/')[-1]
+        return handle_delete_bank_rate(rate_id)
 
     return response(404, {'error': 'Not found'})

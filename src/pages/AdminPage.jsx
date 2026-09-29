@@ -8,8 +8,12 @@ import {
   inviteUser,
   editUser,
   deleteUser,
+  fetchBankRates,
+  addBankRate,
+  updateBankRate,
+  deleteBankRate,
 } from '../lib/auth.js';
-import { BANK_RATES, PLANS, STRIPE } from '../lib/constants.js';
+import { PLANS, STRIPE, KENYA_BANKS } from '../lib/constants.js';
 import { isStripeConfigured } from '../lib/stripe.js';
 
 const TABS = ['Overview', 'Users', 'Payments', 'Integrations', 'System'];
@@ -40,16 +44,26 @@ export default function AdminPage() {
   const [deletingEmail, setDeletingEmail] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Bank rates state
+  const [bankRates, setBankRates] = useState([]);
+  const [showBankForm, setShowBankForm] = useState(false);
+  const [bankForm, setBankForm] = useState({ name: '', odAPR: '', currency: 'KES', country: 'Kenya', aliases: '', type: 'commercial' });
+  const [editingRate, setEditingRate] = useState(null);
+  const [savingRate, setSavingRate] = useState(false);
+  const [deletingRateId, setDeletingRateId] = useState(null);
+
   async function loadData() {
     setLoading(true);
     setError('');
-    const [usersRes, statsRes] = await Promise.all([
+    const [usersRes, statsRes, ratesRes] = await Promise.all([
       fetchAdminUsers(),
       fetchAdminStats(),
+      fetchBankRates(),
     ]);
     if (usersRes.success) setUsers(usersRes.users);
     else setError(usersRes.error);
     if (statsRes.success) setStats(statsRes.stats);
+    if (ratesRes.success) setBankRates(ratesRes.rates);
     setLoading(false);
   }
 
@@ -918,42 +932,279 @@ export default function AdminPage() {
               <div className="admin-stat-value">{stats.sesStatus || 'Sandbox'}</div>
               <div className="admin-stat-label">SES Status</div>
             </div>
+            <div className="glass-card admin-stat-card">
+              <div className="admin-stat-value">{bankRates.length}</div>
+              <div className="admin-stat-label">Banks Configured</div>
+            </div>
           </div>
 
-          <h3 style={{ marginTop: '32px', marginBottom: '16px' }}>Bank Overdraft Rates</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '32px', marginBottom: '16px' }}>
+            <h3 style={{ margin: 0 }}>Bank Overdraft Rates</h3>
+            <button
+              className="btn btn-primary"
+              onClick={() => {
+                setEditingRate(null);
+                setBankForm({ name: '', odAPR: '', currency: 'KES', country: 'Kenya', aliases: '', type: 'commercial' });
+                setShowBankForm(true);
+              }}
+              style={{ padding: '6px 16px', fontSize: '0.85rem' }}
+            >
+              + Add Bank
+            </button>
+          </div>
+
+          {/* Add/Edit bank form */}
+          {showBankForm && (
+            <div className="glass-card" style={{ padding: '24px', marginBottom: '16px', border: '1px solid var(--color-primary)' }}>
+              <h4 style={{ marginBottom: '16px' }}>{editingRate ? 'Edit Bank Rate' : 'Add Bank Rate'}</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="form-group">
+                  <label className="form-label">Bank Name</label>
+                  {editingRate ? (
+                    <input
+                      className="form-input"
+                      value={bankForm.name}
+                      onChange={e => setBankForm(f => ({ ...f, name: e.target.value }))}
+                    />
+                  ) : (
+                    <>
+                      <select
+                        className="form-input"
+                        value={bankForm.name}
+                        onChange={e => {
+                          const bank = KENYA_BANKS.find(b => b.name === e.target.value);
+                          setBankForm(f => ({
+                            ...f,
+                            name: e.target.value,
+                            type: bank ? bank.type : f.type,
+                          }));
+                        }}
+                      >
+                        <option value="">— Select a bank —</option>
+                        <optgroup label="Commercial Banks">
+                          {KENYA_BANKS.filter(b => b.type === 'commercial').map(b => (
+                            <option key={b.name} value={b.name}>{b.name}</option>
+                          ))}
+                        </optgroup>
+                        <optgroup label="Microfinance Banks">
+                          {KENYA_BANKS.filter(b => b.type === 'microfinance').map(b => (
+                            <option key={b.name} value={b.name}>{b.name}</option>
+                          ))}
+                        </optgroup>
+                        <optgroup label="Other">
+                          <option value="__custom">Enter custom name...</option>
+                        </optgroup>
+                      </select>
+                      {bankForm.name === '__custom' && (
+                        <input
+                          className="form-input"
+                          style={{ marginTop: '8px' }}
+                          placeholder="Enter bank name"
+                          value=""
+                          onChange={e => setBankForm(f => ({ ...f, name: e.target.value }))}
+                        />
+                      )}
+                    </>
+                  )}
+                </div>
+                <div className="form-group">
+                  <label className="form-label">OD Interest Rate (% p.a.)</label>
+                  <input
+                    className="form-input"
+                    type="number"
+                    step="0.01"
+                    placeholder="e.g. 14.5"
+                    value={bankForm.odAPR}
+                    onChange={e => setBankForm(f => ({ ...f, odAPR: e.target.value }))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Currency</label>
+                  <select
+                    className="form-input"
+                    value={bankForm.currency}
+                    onChange={e => setBankForm(f => ({ ...f, currency: e.target.value }))}
+                  >
+                    <option value="KES">KES — Kenyan Shilling</option>
+                    <option value="USD">USD — US Dollar</option>
+                    <option value="EUR">EUR — Euro</option>
+                    <option value="GBP">GBP — British Pound</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Country</label>
+                  <input
+                    className="form-input"
+                    value={bankForm.country}
+                    onChange={e => setBankForm(f => ({ ...f, country: e.target.value }))}
+                  />
+                </div>
+                <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                  <label className="form-label">Aliases (comma-separated, used for auto-detection)</label>
+                  <input
+                    className="form-input"
+                    placeholder="e.g. VCB, Victoria Commercial"
+                    value={bankForm.aliases}
+                    onChange={e => setBankForm(f => ({ ...f, aliases: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
+                <button
+                  className="btn btn-primary"
+                  disabled={savingRate || !bankForm.name || bankForm.name === '__custom' || !bankForm.odAPR}
+                  onClick={async () => {
+                    setSavingRate(true);
+                    setError('');
+                    const aliasArr = bankForm.aliases
+                      ? bankForm.aliases.split(',').map(a => a.trim()).filter(Boolean)
+                      : [];
+                    if (editingRate) {
+                      const res = await updateBankRate(editingRate.id, {
+                        name: bankForm.name,
+                        odAPR: parseFloat(bankForm.odAPR),
+                        currency: bankForm.currency,
+                        country: bankForm.country,
+                        aliases: aliasArr.length > 0 ? aliasArr : [bankForm.name],
+                        type: bankForm.type,
+                      });
+                      if (res.success) {
+                        setActionMsg(`${bankForm.name} rate updated.`);
+                        setShowBankForm(false);
+                        const ratesRes = await fetchBankRates();
+                        if (ratesRes.success) setBankRates(ratesRes.rates);
+                      } else setError(res.error);
+                    } else {
+                      const res = await addBankRate({
+                        name: bankForm.name,
+                        odAPR: parseFloat(bankForm.odAPR),
+                        currency: bankForm.currency,
+                        country: bankForm.country,
+                        aliases: aliasArr.length > 0 ? aliasArr : [bankForm.name],
+                        type: bankForm.type,
+                      });
+                      if (res.success) {
+                        setActionMsg(`${bankForm.name} added.`);
+                        setShowBankForm(false);
+                        const ratesRes = await fetchBankRates();
+                        if (ratesRes.success) setBankRates(ratesRes.rates);
+                      } else setError(res.error);
+                    }
+                    setSavingRate(false);
+                  }}
+                >
+                  {savingRate ? 'Saving...' : editingRate ? 'Update' : 'Add Bank'}
+                </button>
+                <button
+                  className="btn btn-outline"
+                  onClick={() => setShowBankForm(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="glass-card" style={{ padding: '4px' }}>
             <div className="table-wrapper">
               <table>
                 <thead>
                   <tr>
                     <th>Bank</th>
+                    <th>Type</th>
                     <th>Country</th>
                     <th>Currency</th>
                     <th>OD APR</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {BANK_RATES.map((bank) => (
-                    <tr key={bank.id}>
-                      <td>{bank.name}</td>
-                      <td>{bank.country}</td>
-                      <td>{bank.currency}</td>
-                      <td style={{ fontWeight: 700 }}>{bank.odAPR}%</td>
-                    </tr>
-                  ))}
-                  {BANK_RATES.length === 0 && (
+                  {bankRates.length === 0 ? (
                     <tr>
-                      <td colSpan="4" style={{ textAlign: 'center', padding: '24px', color: 'var(--color-text-muted)' }}>
-                        No bank rates configured.
+                      <td colSpan="6" style={{ textAlign: 'center', padding: '24px', color: 'var(--color-text-muted)' }}>
+                        No bank rates configured. Click "+ Add Bank" to add one.
                       </td>
                     </tr>
+                  ) : (
+                    bankRates.map((bank) => (
+                      <tr key={bank.id}>
+                        <td style={{ fontWeight: 600 }}>{bank.name}</td>
+                        <td>
+                          <span style={{
+                            padding: '2px 8px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 700,
+                            background: bank.type === 'commercial' ? 'rgba(132, 88, 163, 0.12)' : 'rgba(46, 204, 113, 0.12)',
+                            color: bank.type === 'commercial' ? 'var(--color-primary)' : 'var(--color-success)',
+                          }}>
+                            {bank.type || 'commercial'}
+                          </span>
+                        </td>
+                        <td>{bank.country}</td>
+                        <td>{bank.currency}</td>
+                        <td style={{ fontWeight: 700 }}>{bank.odAPR}%</td>
+                        <td>
+                          <div style={{ display: 'flex', gap: '4px' }}>
+                            <button
+                              className="btn btn-sm btn-outline"
+                              onClick={() => {
+                                setEditingRate(bank);
+                                setBankForm({
+                                  name: bank.name,
+                                  odAPR: String(bank.odAPR),
+                                  currency: bank.currency,
+                                  country: bank.country,
+                                  aliases: (bank.aliases || []).join(', '),
+                                  type: bank.type || 'commercial',
+                                });
+                                setShowBankForm(true);
+                              }}
+                              style={{ padding: '3px 8px', fontSize: '0.7rem' }}
+                            >
+                              Edit
+                            </button>
+                            {deletingRateId === bank.id ? (
+                              <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                                <button
+                                  className="btn btn-sm"
+                                  style={{ padding: '3px 8px', fontSize: '0.7rem', background: 'var(--color-danger)', color: '#fff' }}
+                                  onClick={async () => {
+                                    const res = await deleteBankRate(bank.id);
+                                    if (res.success) {
+                                      setBankRates(prev => prev.filter(r => r.id !== bank.id));
+                                      setActionMsg(`${bank.name} deleted.`);
+                                    } else setError(res.error);
+                                    setDeletingRateId(null);
+                                  }}
+                                >
+                                  Confirm
+                                </button>
+                                <button
+                                  className="btn btn-sm btn-outline"
+                                  onClick={() => setDeletingRateId(null)}
+                                  style={{ padding: '3px 8px', fontSize: '0.7rem' }}
+                                >
+                                  No
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                className="btn btn-sm"
+                                onClick={() => setDeletingRateId(bank.id)}
+                                style={{ padding: '3px 8px', fontSize: '0.7rem', background: 'var(--color-danger)', color: '#fff' }}
+                              >
+                                Delete
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))
                   )}
                 </tbody>
               </table>
             </div>
           </div>
           <p style={{ marginTop: '8px', fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)' }}>
-            These rates are used for auto-detection when a bank statement is uploaded.
+            These rates are used for auto-detection when a bank statement is uploaded. Banks are sourced from CBK's list of licensed institutions.
           </p>
         </div>
       )}
