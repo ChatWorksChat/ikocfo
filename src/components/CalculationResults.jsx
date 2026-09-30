@@ -263,7 +263,7 @@ export default function CalculationResults({ results }) {
           {nominalRate > 0 && nominalEAR && (
             <div>
               <h4 style={{ fontSize: 'var(--font-size-sm)', fontWeight: 700, marginBottom: '8px', color: 'var(--color-primary)' }}>
-                Reference &mdash; Nominal to EAR Conversion
+                Reference &mdash; Nominal to EAR (Effective Annual Rate) Conversion
               </h4>
               <div style={{
                 background: 'var(--color-bg)',
