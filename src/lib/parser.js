@@ -229,34 +229,91 @@ async function parsePDF(file) {
   }
   rowClusters.push(currentCluster.sort((a, b) => a.x - b.x));
 
-  // Determine column boundaries from x-positions across all rows
-  const allX = allItems.map((item) => item.x);
+  // --- Column detection: header-anchored (preferred) or global fallback ---
   const COL_THRESHOLD = 15;
-  const uniqueX = [...new Set(allX)].sort((a, b) => a - b);
 
-  const colBoundaries = [uniqueX[0]];
-  for (let i = 1; i < uniqueX.length; i++) {
-    if (uniqueX[i] - colBoundaries[colBoundaries.length - 1] > COL_THRESHOLD) {
-      colBoundaries.push(uniqueX[i]);
+  // Find the header row cluster by scoring each cluster against known patterns
+  let headerClusterIdx = -1;
+  let bestHeaderScore = 0;
+  const clusterSearchLimit = Math.min(rowClusters.length, 30);
+
+  for (let i = 0; i < clusterSearchLimit; i++) {
+    const texts = rowClusters[i].map((item) => item.text);
+    const score = scoreHeaderRow(texts);
+    if (score > bestHeaderScore) {
+      bestHeaderScore = score;
+      headerClusterIdx = i;
     }
   }
 
-  function getColIndex(x) {
-    for (let i = colBoundaries.length - 1; i >= 0; i--) {
-      if (x >= colBoundaries[i] - COL_THRESHOLD) return i;
+  // Assign a text item to the nearest column anchor by absolute distance
+  function getNearestCol(x, anchors) {
+    let bestIdx = 0;
+    let bestDist = Math.abs(x - anchors[0]);
+    for (let i = 1; i < anchors.length; i++) {
+      const dist = Math.abs(x - anchors[i]);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIdx = i;
+      }
     }
-    return 0;
+    return bestIdx;
   }
 
-  // Convert row clusters into arrays of cell values
-  const tableRows = rowClusters.map((cluster) => {
-    const cells = new Array(colBoundaries.length).fill('');
-    for (const item of cluster) {
-      const colIdx = getColIndex(item.x);
-      cells[colIdx] = cells[colIdx] ? cells[colIdx] + ' ' + item.text : item.text;
+  let tableRows;
+
+  if (headerClusterIdx >= 0 && bestHeaderScore >= 2) {
+    // Header-anchored column detection — use header x-positions as anchors
+    const headerCluster = rowClusters[headerClusterIdx];
+    const HEADER_MERGE_THRESHOLD = 30;
+
+    // Extract x-positions from header items and merge nearby ones
+    // (handles multi-word headers like "VALUE DATE" that are separate text items)
+    const headerXs = headerCluster.map((item) => item.x).sort((a, b) => a - b);
+    const colAnchors = [headerXs[0]];
+    for (let i = 1; i < headerXs.length; i++) {
+      if (headerXs[i] - colAnchors[colAnchors.length - 1] > HEADER_MERGE_THRESHOLD) {
+        colAnchors.push(headerXs[i]);
+      }
     }
-    return cells;
-  });
+
+    // Convert row clusters into arrays of cell values using nearest-anchor assignment
+    tableRows = rowClusters.map((cluster) => {
+      const cells = new Array(colAnchors.length).fill('');
+      for (const item of cluster) {
+        const colIdx = getNearestCol(item.x, colAnchors);
+        cells[colIdx] = cells[colIdx] ? cells[colIdx] + ' ' + item.text : item.text;
+      }
+      return cells;
+    });
+  } else {
+    // Fallback: global column boundary detection for headerless PDFs
+    const allX = allItems.map((item) => item.x);
+    const uniqueX = [...new Set(allX)].sort((a, b) => a - b);
+
+    const colBoundaries = [uniqueX[0]];
+    for (let i = 1; i < uniqueX.length; i++) {
+      if (uniqueX[i] - colBoundaries[colBoundaries.length - 1] > COL_THRESHOLD) {
+        colBoundaries.push(uniqueX[i]);
+      }
+    }
+
+    function getColIndex(x) {
+      for (let i = colBoundaries.length - 1; i >= 0; i--) {
+        if (x >= colBoundaries[i] - COL_THRESHOLD) return i;
+      }
+      return 0;
+    }
+
+    tableRows = rowClusters.map((cluster) => {
+      const cells = new Array(colBoundaries.length).fill('');
+      for (const item of cluster) {
+        const colIdx = getColIndex(item.x);
+        cells[colIdx] = cells[colIdx] ? cells[colIdx] + ' ' + item.text : item.text;
+      }
+      return cells;
+    });
+  }
 
   // Filter out rows that are mostly empty (less than 2 non-empty cells)
   const substantialRows = tableRows.filter(
