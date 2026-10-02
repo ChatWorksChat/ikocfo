@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
-import { autoDetectColumns, detectBank } from '../lib/statementMapper.js';
+import { autoDetectColumns, detectBank, applyMapping, classifyTransactions } from '../lib/statementMapper.js';
 import { COLUMN_TYPES, CURRENCIES, KENYA_BANKS } from '../lib/constants.js';
 import { fetchBankRates, addBankRate } from '../lib/auth.js';
+import { parseDate, parseNumeric } from '../lib/formatters.js';
+import { detectBankInterestCharged } from '../lib/dailyInterestCalculator.js';
 
 export default function StatementPreview({ parsedData, onConfirm }) {
   const { rawRows, headerRowIndex: initialHeaderRow } = parsedData;
@@ -15,6 +17,13 @@ export default function StatementPreview({ parsedData, onConfirm }) {
   const [selectedBank, setSelectedBank] = useState('');
   const [bankRates, setBankRates] = useState([]);
   const [error, setError] = useState('');
+
+  // New fields for daily interest calculation
+  const [openingBalance, setOpeningBalance] = useState('');
+  const [periodStart, setPeriodStart] = useState('');
+  const [periodEnd, setPeriodEnd] = useState('');
+  const [bankInterestCharged, setBankInterestCharged] = useState('');
+  const [autoDetectedInterest, setAutoDetectedInterest] = useState(false);
 
   // Derive headers and data rows from rawRows + headerRowIdx
   const { headers, rows } = useMemo(() => {
@@ -64,8 +73,52 @@ export default function StatementPreview({ parsedData, onConfirm }) {
     }
   }, [headers, rows, bankRates]);
 
+  // Auto-detect period dates, bank interest charged when column mapping changes
+  useEffect(() => {
+    const mapping = columnMapping;
+    if (!mapping || Object.keys(mapping).length === 0) return;
+
+    // Derive period date range from parsed dates
+    const dateCol = Object.entries(mapping).find(([, t]) => t === 'date')?.[0];
+    if (dateCol) {
+      const dates = rows
+        .map(r => parseDate(r[dateCol]))
+        .filter(d => d !== null)
+        .sort((a, b) => a - b);
+      if (dates.length > 0) {
+        const start = dates[0];
+        const end = dates[dates.length - 1];
+        // Format as YYYY-MM-DD for date input
+        const fmt = (d) => {
+          const y = d.getFullYear();
+          const m = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          return `${y}-${m}-${day}`;
+        };
+        if (!periodStart) setPeriodStart(fmt(start));
+        if (!periodEnd) setPeriodEnd(fmt(end));
+      }
+    }
+
+    // Auto-detect bank interest charged from classified transactions
+    try {
+      const mapped = applyMapping(rows, mapping);
+      const classified = classifyTransactions(mapped);
+      const detectedInterest = detectBankInterestCharged(classified);
+      if (detectedInterest > 0 && !bankInterestCharged) {
+        setBankInterestCharged(String(detectedInterest.toFixed(2)));
+        setAutoDetectedInterest(true);
+      }
+    } catch {
+      // Silently ignore classification errors during auto-detection
+    }
+  }, [columnMapping, rows]);
+
   function handleMappingChange(header, type) {
     setColumnMapping(prev => ({ ...prev, [header]: type }));
+    // Reset auto-detected interest when mapping changes so it re-detects
+    setAutoDetectedInterest(false);
+    setBankInterestCharged('');
   }
 
   async function handleConfirm() {
@@ -80,6 +133,18 @@ export default function StatementPreview({ parsedData, onConfirm }) {
     }
     if (!nominalRate || parseFloat(nominalRate) <= 0) {
       setError('Please enter a valid nominal interest rate.');
+      return;
+    }
+    if (!openingBalance && openingBalance !== '0') {
+      setError('Please enter the opening cleared balance.');
+      return;
+    }
+    if (!periodStart || !periodEnd) {
+      setError('Please enter the analysis period start and end dates.');
+      return;
+    }
+    if (new Date(periodStart) >= new Date(periodEnd)) {
+      setError('Period start date must be before end date.');
       return;
     }
     setError('');
@@ -105,6 +170,10 @@ export default function StatementPreview({ parsedData, onConfirm }) {
       currency,
       resolvedHeaders: headers,
       resolvedRows: rows,
+      openingBalance: parseFloat(openingBalance),
+      periodStart,
+      periodEnd,
+      bankInterestCharged: bankInterestCharged ? parseFloat(bankInterestCharged) : 0,
     });
   }
 
@@ -348,6 +417,78 @@ export default function StatementPreview({ parsedData, onConfirm }) {
               <option key={c.code} value={c.code}>{c.code} — {c.name}</option>
             ))}
           </select>
+        </div>
+      </div>
+
+      {/* Daily Interest Verification Inputs */}
+      <div style={{
+        padding: '20px', marginBottom: '24px',
+        background: 'rgba(132, 88, 163, 0.04)',
+        borderRadius: 'var(--radius-sm)',
+        border: '1px solid rgba(132, 88, 163, 0.12)',
+      }}>
+        <h4 style={{ marginBottom: '4px', fontSize: 'var(--font-size-sm)', fontWeight: 700 }}>
+          Interest Verification Inputs
+        </h4>
+        <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '16px' }}>
+          Required for daily interest reconstruction. Period dates are auto-detected from the statement.
+        </p>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+          <div className="form-group">
+            <label className="form-label">Period Start Date</label>
+            <input
+              className="form-input"
+              type="date"
+              value={periodStart}
+              onChange={e => setPeriodStart(e.target.value)}
+            />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Period End Date</label>
+            <input
+              className="form-input"
+              type="date"
+              value={periodEnd}
+              onChange={e => setPeriodEnd(e.target.value)}
+            />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Opening Cleared Balance</label>
+            <input
+              className="form-input"
+              type="number"
+              step="0.01"
+              placeholder="e.g. -75290000"
+              value={openingBalance}
+              onChange={e => setOpeningBalance(e.target.value)}
+            />
+            <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', marginTop: '4px', display: 'block' }}>
+              Enter as negative if overdrawn (e.g. -75,290,000)
+            </span>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Bank Interest Charged</label>
+            <input
+              className="form-input"
+              type="number"
+              step="0.01"
+              placeholder="e.g. 1087813.65"
+              value={bankInterestCharged}
+              onChange={e => {
+                setBankInterestCharged(e.target.value);
+                setAutoDetectedInterest(false);
+              }}
+            />
+            {autoDetectedInterest && (
+              <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-success)', marginTop: '4px', display: 'block' }}>
+                Auto-detected from OD interest transactions. You can edit this value.
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

@@ -1,4 +1,4 @@
-// Regulatory checks: in duplum, rate changes, excess OD
+// Regulatory checks: in duplum, rate changes, excess OD, interest variance
 
 import { parseNumeric, parseDate } from './formatters.js';
 import { daysBetween } from './dayCount.js';
@@ -7,28 +7,40 @@ import { daysBetween } from './dayCount.js';
  * Run all regulatory checks on parsed transactions.
  * Returns an array of flag objects: { type, severity, title, message }
  */
-export function runRegulatoryChecks(transactions, { overdraftLimit, nominalRate, currency }) {
+export function runRegulatoryChecks(transactions, { overdraftLimit, nominalRate, currency, dailyInterestResult }) {
   const flags = [];
 
-  flags.push(...checkInDuplum(transactions));
+  flags.push(...checkInDuplum(transactions, dailyInterestResult));
   flags.push(...checkRateChanges(transactions, nominalRate, currency));
-  flags.push(...checkExcessOverdraft(transactions, overdraftLimit));
+  flags.push(...checkExcessOverdraft(transactions, overdraftLimit, dailyInterestResult));
+  if (dailyInterestResult) {
+    flags.push(...checkInterestVariance(dailyInterestResult));
+  }
 
   return flags;
 }
 
 /**
  * In duplum rule: total interest should not exceed the principal amount.
+ * When daily interest data is available, use bankInterestCharged vs maxODBalance.
  */
-function checkInDuplum(transactions) {
+function checkInDuplum(transactions, dailyInterestResult) {
   const flags = [];
-  let totalInterest = 0;
-  let maxBalance = 0;
 
-  for (const tx of transactions) {
-    totalInterest += Math.abs(parseNumeric(tx.interest));
-    const bal = Math.abs(parseNumeric(tx.balance));
-    if (bal > maxBalance) maxBalance = bal;
+  let totalInterest;
+  let maxBalance;
+
+  if (dailyInterestResult) {
+    totalInterest = dailyInterestResult.bankInterestCharged;
+    maxBalance = dailyInterestResult.maxODBalance;
+  } else {
+    totalInterest = 0;
+    maxBalance = 0;
+    for (const tx of transactions) {
+      totalInterest += Math.abs(parseNumeric(tx.interest));
+      const bal = Math.abs(parseNumeric(tx.balance));
+      if (bal > maxBalance) maxBalance = bal;
+    }
   }
 
   if (maxBalance > 0 && totalInterest > maxBalance) {
@@ -99,10 +111,22 @@ function checkRateChanges(transactions, nominalRate, currency) {
 
 /**
  * Flag balances exceeding the stated overdraft limit.
+ * Optionally uses dailySchedule for more accurate max balance detection.
  */
-function checkExcessOverdraft(transactions, overdraftLimit) {
+function checkExcessOverdraft(transactions, overdraftLimit, dailyInterestResult) {
   const flags = [];
   if (!overdraftLimit || overdraftLimit <= 0) return flags;
+
+  // Use daily schedule max if available for more accurate detection
+  if (dailyInterestResult && dailyInterestResult.maxODBalance > overdraftLimit) {
+    flags.push({
+      type: 'excess_od',
+      severity: 'warning',
+      title: 'Overdraft Limit Exceeded',
+      message: `Daily balance reconstruction shows the overdraft exposure exceeded the stated limit of ${overdraftLimit.toLocaleString('en-US', { minimumFractionDigits: 2 })}. Peak overdraft balance: ${dailyInterestResult.maxODBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}.`,
+    });
+    return flags;
+  }
 
   const excesses = [];
 
@@ -121,6 +145,32 @@ function checkExcessOverdraft(transactions, overdraftLimit) {
       severity: 'warning',
       title: 'Overdraft Limit Exceeded',
       message: `${excesses.length} transaction(s) show a balance exceeding the stated overdraft limit of ${overdraftLimit.toLocaleString('en-US', { minimumFractionDigits: 2 })}. Peak balance: ${maxExcess.toLocaleString('en-US', { minimumFractionDigits: 2 })}.`,
+    });
+  }
+
+  return flags;
+}
+
+/**
+ * Check for interest variance between bank's charge and independently calculated interest.
+ */
+function checkInterestVariance(dailyInterestResult) {
+  const flags = [];
+
+  if (dailyInterestResult.status === 'discrepancy') {
+    const direction = dailyInterestResult.variance > 0 ? 'overcharged' : 'undercharged';
+    flags.push({
+      type: 'interest_variance',
+      severity: 'danger',
+      title: 'Interest Overcharge Detected',
+      message: `The bank's interest charge differs from the independently calculated amount by ${Math.abs(dailyInterestResult.variancePercent).toFixed(1)}%. The bank appears to have ${direction} by ${Math.abs(dailyInterestResult.variance).toLocaleString('en-US', { minimumFractionDigits: 2 })}. Review the daily audit schedule for details.`,
+    });
+  } else if (dailyInterestResult.status === 'review') {
+    flags.push({
+      type: 'interest_variance',
+      severity: 'warning',
+      title: 'Interest Variance Noted',
+      message: `The bank's interest charge differs from the independently calculated amount by ${Math.abs(dailyInterestResult.variancePercent).toFixed(1)}%. This is within a moderate range but worth reviewing. Check the daily audit schedule.`,
     });
   }
 

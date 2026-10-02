@@ -71,6 +71,10 @@ export default function CalculatorPage() {
           overdraftLimit: settings.overdraftLimit,
           includeXIRR: hasXirrAccess(user),
           fileName: parsedData.fileName,
+          openingBalance: settings.openingBalance,
+          periodStart: settings.periodStart,
+          periodEnd: settings.periodEnd,
+          bankInterestCharged: settings.bankInterestCharged,
         });
 
         if (calcResults.error) {
@@ -82,12 +86,20 @@ export default function CalculatorPage() {
         setResults(calcResults);
 
         // Save to history
-        addHistoryEntry(user.email, {
+        const historyEntry = {
           fileName: parsedData.fileName,
-          effectiveAPR: calcResults.effectiveAPR,
           currency: settings.currency,
           transactionCount: dataRows.length,
-        });
+        };
+
+        if (calcResults.dailyInterest) {
+          historyEntry.expectedInterest = calcResults.dailyInterest.expectedInterest;
+          historyEntry.bankInterestCharged = calcResults.dailyInterest.bankInterestCharged;
+          historyEntry.variancePercent = calcResults.dailyInterest.variancePercent;
+          historyEntry.status = calcResults.dailyInterest.status;
+        }
+
+        addHistoryEntry(user.email, historyEntry);
 
         setStep(3);
       } catch (err) {
@@ -109,7 +121,7 @@ export default function CalculatorPage() {
     <div className="page-container">
       <h1 className="page-title">Overdraft Audit Calculator</h1>
       <p className="page-subtitle">
-        Upload your bank statement to discover your true overdraft cost.
+        Upload your bank statement to verify your overdraft interest charges.
       </p>
 
       {/* Step indicator */}

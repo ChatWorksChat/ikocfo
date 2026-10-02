@@ -1,35 +1,26 @@
 import { useState } from 'react';
-import { formatDate } from '../lib/formatters.js';
-import { parseDate } from '../lib/formatters.js';
+import { formatDate, formatCurrency } from '../lib/formatters.js';
 
 export default function ValidationScreen({ parsedData, settings, onConfirm, onBack }) {
   const [agreed, setAgreed] = useState(false);
 
   const { fileName } = parsedData;
-  const { nominalRate, overdraftLimit, currency, columnMapping, resolvedRows } = settings;
+  const {
+    nominalRate, overdraftLimit, currency, columnMapping, resolvedRows,
+    openingBalance, periodStart, periodEnd, bankInterestCharged,
+  } = settings;
   // Use resolved rows (preamble excluded) if available, fall back to parsedData.rows
   const rows = resolvedRows || parsedData.rows || [];
 
-  // Find date range
-  const dateCol = Object.entries(columnMapping).find(([, t]) => t === 'date')?.[0];
-  let startDate = null;
-  let endDate = null;
-  if (dateCol) {
-    const dates = rows
-      .map(r => parseDate(r[dateCol]))
-      .filter(d => d !== null)
-      .sort((a, b) => a - b);
-    if (dates.length > 0) {
-      startDate = dates[0];
-      endDate = dates[dates.length - 1];
-    }
-  }
+  // Use explicit period dates from settings
+  const startDate = periodStart ? new Date(periodStart) : null;
+  const endDate = periodEnd ? new Date(periodEnd) : null;
 
   return (
     <div>
       <h3 style={{ marginBottom: '20px' }}>Confirm Analysis</h3>
       <p style={{ color: 'var(--color-text-light)', marginBottom: '24px', fontSize: 'var(--font-size-sm)' }}>
-        Review the details below before running the overdraft audit.
+        Review the details below before running the overdraft interest verification.
       </p>
 
       <div className="glass-card" style={{ padding: '28px', marginBottom: '24px' }}>
@@ -43,7 +34,7 @@ export default function ValidationScreen({ parsedData, settings, onConfirm, onBa
             <div style={{ fontWeight: 700 }}>{rows.length.toLocaleString()}</div>
           </div>
           <div>
-            <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)', marginBottom: '4px' }}>Date Range</div>
+            <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)', marginBottom: '4px' }}>Analysis Period</div>
             <div style={{ fontWeight: 700 }}>
               {startDate && endDate
                 ? `${formatDate(startDate)} — ${formatDate(endDate)}`
@@ -61,6 +52,16 @@ export default function ValidationScreen({ parsedData, settings, onConfirm, onBa
           <div>
             <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)', marginBottom: '4px' }}>Overdraft Limit</div>
             <div style={{ fontWeight: 700 }}>{overdraftLimit ? overdraftLimit.toLocaleString() : 'Not specified'}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)', marginBottom: '4px' }}>Opening Cleared Balance</div>
+            <div style={{ fontWeight: 700 }}>{formatCurrency(openingBalance, currency)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)', marginBottom: '4px' }}>Bank Interest Charged</div>
+            <div style={{ fontWeight: 700 }}>
+              {bankInterestCharged ? formatCurrency(bankInterestCharged, currency) : 'Not specified'}
+            </div>
           </div>
         </div>
       </div>
