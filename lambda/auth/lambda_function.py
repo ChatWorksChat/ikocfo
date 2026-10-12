@@ -49,10 +49,10 @@ SES_SENDER = os.environ.get('SES_SENDER', 'administrator@forwardsflow.com')
 SES_REGION = os.environ.get('SES_REGION', 'eu-west-1')
 PASSWORD_SALT = os.environ.get('PASSWORD_SALT', 'ikocfo-salt-2024')
 
-# Twilio SMS configuration
+# Twilio configuration
 TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '')
 TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN', '')
-TWILIO_FROM = os.environ.get('TWILIO_FROM', '')
+TWILIO_VERIFY_SID = os.environ.get('TWILIO_VERIFY_SID', '')
 
 # WebAuthn configuration — env-overridable for local dev
 WEBAUTHN_RP_ID = os.environ.get('WEBAUTHN_RP_ID', 'ikocfo.com')
@@ -160,16 +160,16 @@ If you did not create an account, please ignore this email.
 
 
 def send_sms_otp(phone, code):
-    """Send OTP via Twilio SMS API. Returns True on success."""
-    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_FROM:
-        print('Twilio env vars not configured, skipping SMS OTP')
+    """Send OTP via Twilio Verify API. Returns True on success."""
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_VERIFY_SID:
+        print('Twilio Verify env vars not configured, skipping SMS OTP')
         return False
 
-    url = f'https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json'
+    url = f'https://verify.twilio.com/v2/Services/{TWILIO_VERIFY_SID}/Verifications'
     data = urlencode({
-        'From': TWILIO_FROM,
         'To': phone,
-        'Body': f'Your IKO CFO verification code is: {code}',
+        'Channel': 'sms',
+        'CustomCode': code,
     }).encode('utf-8')
 
     credentials = base64.b64encode(f'{TWILIO_ACCOUNT_SID}:{TWILIO_AUTH_TOKEN}'.encode('utf-8')).decode('utf-8')
@@ -180,9 +180,9 @@ def send_sms_otp(phone, code):
     try:
         resp = urllib.request.urlopen(req)
         if 200 <= resp.status < 300:
-            print(f'SMS OTP sent to {phone}')
+            print(f'SMS OTP sent to {phone} via Verify API')
             return True
-        print(f'Twilio returned status {resp.status}')
+        print(f'Twilio Verify returned status {resp.status}')
         return False
     except Exception as e:
         print(f'SMS OTP error: {e}')
