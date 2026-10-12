@@ -190,7 +190,7 @@ export default function RegistrationForm({ onSubmit, error, loading }) {
           placeholder="+254712345678"
         />
         <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-light)', marginTop: '4px' }}>
-          For WhatsApp verification codes. Include country code (e.g. +254).
+          For SMS verification codes. Include country code (e.g. +254).
         </div>
         {errors.phoneNumber && <div className="form-error">{errors.phoneNumber}</div>}
       </div>

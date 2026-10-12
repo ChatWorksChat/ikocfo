@@ -49,10 +49,10 @@ SES_SENDER = os.environ.get('SES_SENDER', 'administrator@forwardsflow.com')
 SES_REGION = os.environ.get('SES_REGION', 'eu-west-1')
 PASSWORD_SALT = os.environ.get('PASSWORD_SALT', 'ikocfo-salt-2024')
 
-# Twilio WhatsApp configuration
+# Twilio SMS configuration
 TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '')
 TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN', '')
-TWILIO_WHATSAPP_FROM = os.environ.get('TWILIO_WHATSAPP_FROM', '')
+TWILIO_FROM = os.environ.get('TWILIO_FROM', '')
 
 # WebAuthn configuration — env-overridable for local dev
 WEBAUTHN_RP_ID = os.environ.get('WEBAUTHN_RP_ID', 'ikocfo.com')
@@ -159,17 +159,16 @@ If you did not create an account, please ignore this email.
     return send_email(email, subject, body, html)
 
 
-def send_whatsapp_otp(phone, code):
-    """Send OTP via Twilio WhatsApp API. Returns True on success."""
-    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_WHATSAPP_FROM:
-        print('Twilio env vars not configured, skipping WhatsApp OTP')
+def send_sms_otp(phone, code):
+    """Send OTP via Twilio SMS API. Returns True on success."""
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_FROM:
+        print('Twilio env vars not configured, skipping SMS OTP')
         return False
 
     url = f'https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json'
-    to_number = phone if phone.startswith('whatsapp:') else f'whatsapp:{phone}'
     data = urlencode({
-        'From': TWILIO_WHATSAPP_FROM,
-        'To': to_number,
+        'From': TWILIO_FROM,
+        'To': phone,
         'Body': f'Your IKO CFO verification code is: {code}',
     }).encode('utf-8')
 
@@ -181,21 +180,21 @@ def send_whatsapp_otp(phone, code):
     try:
         resp = urllib.request.urlopen(req)
         if 200 <= resp.status < 300:
-            print(f'WhatsApp OTP sent to {phone}')
+            print(f'SMS OTP sent to {phone}')
             return True
         print(f'Twilio returned status {resp.status}')
         return False
     except Exception as e:
-        print(f'WhatsApp OTP error: {e}')
+        print(f'SMS OTP error: {e}')
         return False
 
 
 def send_otp(user, code):
-    """Send OTP via WhatsApp (primary) with email fallback. Returns {'channel': 'whatsapp'|'email'}."""
+    """Send OTP via SMS (primary) with email fallback. Returns {'channel': 'sms'|'email'}."""
     phone = user.get('phone_number', '')
     if phone and TWILIO_ACCOUNT_SID:
-        if send_whatsapp_otp(phone, code):
-            return {'channel': 'whatsapp'}
+        if send_sms_otp(phone, code):
+            return {'channel': 'sms'}
     # Fallback to email
     send_verification_email(user['email'], code)
     return {'channel': 'email'}
