@@ -15,6 +15,8 @@ import CalculatorPage from './pages/CalculatorPage.jsx';
 import PricingPage from './pages/PricingPage.jsx';
 import AdminPage from './pages/AdminPage.jsx';
 import AcceptInvitePage from './pages/AcceptInvitePage.jsx';
+import ForgotPasswordPage from './pages/ForgotPasswordPage.jsx';
+import ResetPasswordPage from './pages/ResetPasswordPage.jsx';
 import NotFoundPage from './pages/NotFoundPage.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 import AdminRoute from './components/AdminRoute.jsx';
@@ -27,6 +29,8 @@ createRoot(document.getElementById('root')).render(
           <Route index element={<LandingPage />} />
           <Route path="register" element={<RegisterPage />} />
           <Route path="login" element={<LoginPage />} />
+          <Route path="forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="reset-password" element={<ResetPasswordPage />} />
           <Route path="login/mfa" element={<MfaChallengePage />} />
           <Route path="mfa/setup" element={<ProtectedRoute><MfaSetupPage /></ProtectedRoute>} />
           <Route path="settings/security" element={<ProtectedRoute><MfaSettingsPage /></ProtectedRoute>} />

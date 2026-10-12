@@ -11,13 +11,15 @@ import hashlib
 import hmac
 import os
 import random
+import re
 import string
 import struct
 import base64
 import secrets
 import time
 from datetime import datetime, timezone
-from urllib.parse import unquote
+from urllib.parse import unquote, urlencode
+import urllib.request
 
 import boto3
 from botocore.exceptions import ClientError
@@ -46,6 +48,11 @@ TABLE_NAME = os.environ.get('DYNAMODB_TABLE', 'ikocfo-users')
 SES_SENDER = os.environ.get('SES_SENDER', 'administrator@forwardsflow.com')
 SES_REGION = os.environ.get('SES_REGION', 'eu-west-1')
 PASSWORD_SALT = os.environ.get('PASSWORD_SALT', 'ikocfo-salt-2024')
+
+# Twilio WhatsApp configuration
+TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '')
+TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN', '')
+TWILIO_WHATSAPP_FROM = os.environ.get('TWILIO_WHATSAPP_FROM', '')
 
 # WebAuthn configuration — env-overridable for local dev
 WEBAUTHN_RP_ID = os.environ.get('WEBAUTHN_RP_ID', 'ikocfo.com')
@@ -150,6 +157,48 @@ If you did not create an account, please ignore this email.
 </div>
 """
     return send_email(email, subject, body, html)
+
+
+def send_whatsapp_otp(phone, code):
+    """Send OTP via Twilio WhatsApp API. Returns True on success."""
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_WHATSAPP_FROM:
+        print('Twilio env vars not configured, skipping WhatsApp OTP')
+        return False
+
+    url = f'https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json'
+    to_number = phone if phone.startswith('whatsapp:') else f'whatsapp:{phone}'
+    data = urlencode({
+        'From': TWILIO_WHATSAPP_FROM,
+        'To': to_number,
+        'Body': f'Your IKO CFO verification code is: {code}',
+    }).encode('utf-8')
+
+    credentials = base64.b64encode(f'{TWILIO_ACCOUNT_SID}:{TWILIO_AUTH_TOKEN}'.encode('utf-8')).decode('utf-8')
+    req = urllib.request.Request(url, data=data, method='POST')
+    req.add_header('Authorization', f'Basic {credentials}')
+    req.add_header('Content-Type', 'application/x-www-form-urlencoded')
+
+    try:
+        resp = urllib.request.urlopen(req)
+        if 200 <= resp.status < 300:
+            print(f'WhatsApp OTP sent to {phone}')
+            return True
+        print(f'Twilio returned status {resp.status}')
+        return False
+    except Exception as e:
+        print(f'WhatsApp OTP error: {e}')
+        return False
+
+
+def send_otp(user, code):
+    """Send OTP via WhatsApp (primary) with email fallback. Returns {'channel': 'whatsapp'|'email'}."""
+    phone = user.get('phone_number', '')
+    if phone and TWILIO_ACCOUNT_SID:
+        if send_whatsapp_otp(phone, code):
+            return {'channel': 'whatsapp'}
+    # Fallback to email
+    send_verification_email(user['email'], code)
+    return {'channel': 'email'}
 
 
 def send_credentials_email(email, password):
@@ -274,12 +323,17 @@ def handle_register(body):
     company_name = body.get('companyName', '')
     company_address = body.get('companyAddress', '')
     position = body.get('position', '')
+    phone_number = (body.get('phone_number') or '').strip()
 
     if not email or not password:
         return response(400, {'error': 'Email and password are required.'})
 
     if len(password) < 8:
         return response(400, {'error': 'Password must be at least 8 characters.'})
+
+    # Validate phone number format if provided
+    if phone_number and not re.match(r'^\+\d{10,15}$', phone_number):
+        return response(400, {'error': 'Phone number must be in E.164 format (e.g. +254712345678).'})
 
     # Check if user exists
     try:
@@ -310,11 +364,13 @@ def handle_register(body):
         'createdAt': now_iso(),
         'lastLoginAt': None,
     }
+    if phone_number:
+        item['phone_number'] = phone_number
 
     table.put_item(Item=item)
-    send_verification_email(email, code)
+    otp_result = send_otp(item, code)
 
-    return response(201, {'email': email, 'message': 'Verification code sent.'})
+    return response(201, {'email': email, 'message': 'Verification code sent.', 'otp_channel': otp_result['channel']})
 
 
 def handle_verify(body):
@@ -471,9 +527,9 @@ def handle_resend(body):
         ExpressionAttributeValues={':c': code, ':e': expires},
     )
 
-    send_verification_email(email, code)
+    otp_result = send_otp(user, code)
 
-    return response(200, {'message': 'New verification code sent.'})
+    return response(200, {'message': 'New verification code sent.', 'otp_channel': otp_result['channel']})
 
 
 # --- Admin Handlers ---
@@ -1808,6 +1864,73 @@ def handle_save_plans(body):
         return response(500, {'error': 'Failed to save plans.'})
 
 
+# --- Password Reset Handlers ---
+
+def handle_forgot_password(body):
+    email = (body.get('email') or '').lower().strip()
+    if not email:
+        return response(400, {'error': 'Email is required.'})
+
+    generic_msg = 'If an account exists, a reset code has been sent.'
+
+    try:
+        result = table.get_item(Key={'email': email})
+    except ClientError:
+        return response(200, {'message': generic_msg})
+
+    if 'Item' not in result:
+        return response(200, {'message': generic_msg})
+
+    user = result['Item']
+    code = generate_code()
+    expires = int(time.time()) + 900  # 15 minutes
+
+    table.update_item(
+        Key={'email': email},
+        UpdateExpression='SET resetCode = :c, resetCodeExpiresAt = :e',
+        ExpressionAttributeValues={':c': code, ':e': expires},
+    )
+
+    otp_result = send_otp(user, code)
+    return response(200, {'message': generic_msg, 'otp_channel': otp_result['channel']})
+
+
+def handle_reset_password(body):
+    email = (body.get('email') or '').lower().strip()
+    code = (body.get('code') or '').strip()
+    new_password = body.get('new_password', '')
+
+    if not email or not code or not new_password:
+        return response(400, {'error': 'Email, code, and new password are required.'})
+
+    if len(new_password) < 8:
+        return response(400, {'error': 'Password must be at least 8 characters.'})
+
+    try:
+        result = table.get_item(Key={'email': email})
+    except ClientError:
+        return response(500, {'error': 'Database error.'})
+
+    if 'Item' not in result:
+        return response(400, {'error': 'Invalid or expired reset code.'})
+
+    user = result['Item']
+
+    if user.get('resetCode') != code:
+        return response(400, {'error': 'Invalid or expired reset code.'})
+
+    if int(user.get('resetCodeExpiresAt', 0)) < int(time.time()):
+        return response(400, {'error': 'Reset code has expired. Please request a new one.'})
+
+    table.update_item(
+        Key={'email': email},
+        UpdateExpression='SET password_hash = :p REMOVE resetCode, resetCodeExpiresAt',
+        ExpressionAttributeValues={':p': hash_password(new_password)},
+    )
+
+    return response(200, {'message': 'Password has been reset successfully.'})
+
+
 # --- Main Handler ---
 
 def lambda_handler(event, context):
@@ -1837,6 +1960,12 @@ def lambda_handler(event, context):
 
     if method == 'POST' and path == '/auth/resend':
         return handle_resend(body)
+
+    if method == 'POST' and path == '/auth/forgot-password':
+        return handle_forgot_password(body)
+
+    if method == 'POST' and path == '/auth/reset-password':
+        return handle_reset_password(body)
 
     # --- MFA routes ---
     if method == 'POST' and path == '/auth/mfa/totp/setup':

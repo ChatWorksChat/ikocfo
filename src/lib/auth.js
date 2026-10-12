@@ -29,16 +29,17 @@ async function apiPut(path, body) {
   return res.json();
 }
 
-export async function register({ email, password, firstName, lastName, accountType, companyName, companyAddress, position }) {
+export async function register({ email, password, firstName, lastName, accountType, companyName, companyAddress, position, phoneNumber }) {
   try {
     const data = await apiCall('/auth/register', {
       email, password, firstName, lastName, accountType,
       companyName, companyAddress, position,
+      phone_number: phoneNumber || undefined,
     });
     if (data.error) {
       return { success: false, error: data.error };
     }
-    return { success: true, email: data.email };
+    return { success: true, email: data.email, otp_channel: data.otp_channel };
   } catch {
     return { success: false, error: 'Unable to connect to server. Please try again.' };
   }
@@ -62,7 +63,31 @@ export async function resendCode(email) {
     if (data.error) {
       return { success: false, error: data.error };
     }
-    return { success: true };
+    return { success: true, otp_channel: data.otp_channel };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+export async function forgotPassword(email) {
+  try {
+    const data = await apiCall('/auth/forgot-password', { email });
+    if (data.error) {
+      return { success: false, error: data.error };
+    }
+    return { success: true, message: data.message, otp_channel: data.otp_channel };
+  } catch {
+    return { success: false, error: 'Unable to connect to server. Please try again.' };
+  }
+}
+
+export async function resetPassword(email, code, new_password) {
+  try {
+    const data = await apiCall('/auth/reset-password', { email, code, new_password });
+    if (data.error) {
+      return { success: false, error: data.error };
+    }
+    return { success: true, message: data.message };
   } catch {
     return { success: false, error: 'Unable to connect to server. Please try again.' };
   }

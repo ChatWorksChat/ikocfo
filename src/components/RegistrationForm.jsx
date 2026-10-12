@@ -7,6 +7,7 @@ export default function RegistrationForm({ onSubmit, error, loading }) {
     lastName: '',
     email: '',
     password: '',
+    phoneNumber: '',
     companyName: '',
     companyAddress: '',
     position: '',
@@ -175,6 +176,23 @@ export default function RegistrationForm({ onSubmit, error, loading }) {
           placeholder="Minimum 8 characters"
         />
         {errors.password && <div className="form-error">{errors.password}</div>}
+      </div>
+
+      <div className="form-group">
+        <label className="form-label" htmlFor="phoneNumber">Phone Number (optional)</label>
+        <input
+          className="form-input"
+          id="phoneNumber"
+          name="phoneNumber"
+          type="tel"
+          value={form.phoneNumber}
+          onChange={handleChange}
+          placeholder="+254712345678"
+        />
+        <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-light)', marginTop: '4px' }}>
+          For WhatsApp verification codes. Include country code (e.g. +254).
+        </div>
+        {errors.phoneNumber && <div className="form-error">{errors.phoneNumber}</div>}
       </div>
 
       {accountType === 'corporate' && (

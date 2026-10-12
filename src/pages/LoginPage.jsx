@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { login } from '../lib/auth.js';
 
 export default function LoginPage() {
@@ -8,6 +8,8 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+  const successMessage = location.state?.message || '';
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -51,6 +53,7 @@ export default function LoginPage() {
         <h1>Welcome Back</h1>
         <p>Log in to your IKO CFO account</p>
 
+        {successMessage && <div className="alert alert-success">{successMessage}</div>}
         {error && <div className="alert alert-error">{error}</div>}
 
         <form onSubmit={handleSubmit}>
@@ -76,6 +79,12 @@ export default function LoginPage() {
               onChange={e => setPassword(e.target.value)}
               placeholder="Enter your password"
             />
+          </div>
+
+          <div style={{ textAlign: 'right', marginBottom: '16px' }}>
+            <Link to="/forgot-password" style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-primary)' }}>
+              Forgot password?
+            </Link>
           </div>
 
           <button type="submit" className="btn btn-primary btn-lg" disabled={loading}>
