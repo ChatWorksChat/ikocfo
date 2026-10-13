@@ -24,6 +24,8 @@ export default function StatementPreview({ parsedData, onConfirm }) {
   const [periodEnd, setPeriodEnd] = useState('');
   const [bankInterestCharged, setBankInterestCharged] = useState('');
   const [autoDetectedInterest, setAutoDetectedInterest] = useState(false);
+  const [autoDetectedBalance, setAutoDetectedBalance] = useState(false);
+  const [balanceWarning, setBalanceWarning] = useState('');
 
   // Derive headers and data rows from rawRows + headerRowIdx
   const { headers, rows } = useMemo(() => {
@@ -112,13 +114,65 @@ export default function StatementPreview({ parsedData, onConfirm }) {
     } catch {
       // Silently ignore classification errors during auto-detection
     }
+
+    // Auto-detect opening balance from "Brought Forward" / "B/F" rows or first transaction
+    try {
+      const descCol = Object.entries(mapping).find(([, t]) => t === 'description')?.[0];
+      const balCol = Object.entries(mapping).find(([, t]) => t === 'balance')?.[0];
+      const debitCol = Object.entries(mapping).find(([, t]) => t === 'debit')?.[0];
+      const creditCol = Object.entries(mapping).find(([, t]) => t === 'credit')?.[0];
+      const dateColKey = Object.entries(mapping).find(([, t]) => t === 'date')?.[0];
+
+      if (balCol && !openingBalance) {
+        let detected = null;
+
+        // Method 1: Look for "Brought Forward" / "B/F" / "Opening Balance" rows
+        if (descCol) {
+          const bfPatterns = [/brought?\s*f(or)?w/i, /\bb\.?\/?f\.?\b/i, /opening\s*bal/i, /balance\s*b\.?\/?f/i];
+          for (const row of rows) {
+            const desc = String(row[descCol] || '');
+            if (bfPatterns.some(p => p.test(desc))) {
+              const bal = parseNumeric(row[balCol]);
+              if (bal !== 0) {
+                detected = bal;
+                break;
+              }
+            }
+          }
+        }
+
+        // Method 2: Derive from first dated transaction (balance - credit + debit = opening)
+        if (detected == null && dateColKey) {
+          for (const row of rows) {
+            if (!parseDate(row[dateColKey])) continue;
+            const bal = parseNumeric(row[balCol]);
+            const dr = debitCol ? parseNumeric(row[debitCol]) : 0;
+            const cr = creditCol ? parseNumeric(row[creditCol]) : 0;
+            if (bal !== 0) {
+              detected = bal - cr + dr;
+              break;
+            }
+          }
+        }
+
+        if (detected != null && detected !== 0) {
+          setOpeningBalance(String(detected));
+          setAutoDetectedBalance(true);
+        }
+      }
+    } catch {
+      // Silently ignore detection errors
+    }
   }, [columnMapping, rows]);
 
   function handleMappingChange(header, type) {
     setColumnMapping(prev => ({ ...prev, [header]: type }));
-    // Reset auto-detected interest when mapping changes so it re-detects
+    // Reset auto-detected values when mapping changes so they re-detect
     setAutoDetectedInterest(false);
     setBankInterestCharged('');
+    setAutoDetectedBalance(false);
+    setOpeningBalance('');
+    setBalanceWarning('');
   }
 
   async function handleConfirm() {
@@ -135,10 +189,18 @@ export default function StatementPreview({ parsedData, onConfirm }) {
       setError('Please enter a valid nominal interest rate.');
       return;
     }
+
+    // Use parseNumeric to handle comma-formatted values (e.g. "-75,286,209.03")
+    const parsedBalance = parseNumeric(openingBalance);
     if (!openingBalance && openingBalance !== '0') {
       setError('Please enter the opening cleared balance.');
       return;
     }
+    if (parsedBalance === 0 && !/^[\s\-]?0/.test(String(openingBalance).replace(/,/g, ''))) {
+      setError('Could not parse the opening balance. Remove any non-numeric characters except minus sign, commas, and decimal point.');
+      return;
+    }
+
     if (!periodStart || !periodEnd) {
       setError('Please enter the analysis period start and end dates.');
       return;
@@ -147,6 +209,32 @@ export default function StatementPreview({ parsedData, onConfirm }) {
       setError('Period start date must be before end date.');
       return;
     }
+
+    // Cross-validate: check that the entered balance is plausible against the first transaction
+    const balCol = Object.entries(columnMapping).find(([, t]) => t === 'balance')?.[0];
+    const debitCol = Object.entries(columnMapping).find(([, t]) => t === 'debit')?.[0];
+    const creditCol = Object.entries(columnMapping).find(([, t]) => t === 'credit')?.[0];
+    const dateColKey = Object.entries(columnMapping).find(([, t]) => t === 'date')?.[0];
+
+    if (balCol && dateColKey) {
+      for (const row of rows) {
+        if (!parseDate(row[dateColKey])) continue;
+        const bal = parseNumeric(row[balCol]);
+        const dr = debitCol ? parseNumeric(row[debitCol]) : 0;
+        const cr = creditCol ? parseNumeric(row[creditCol]) : 0;
+        if (bal !== 0) {
+          const implied = bal - cr + dr;
+          // If the entered value differs from implied by more than 10×, warn
+          if (implied !== 0 && Math.abs(parsedBalance / implied) < 0.1) {
+            setBalanceWarning(
+              `The entered balance (${parsedBalance.toLocaleString()}) seems far from the expected value (${implied.toLocaleString()}). Please double-check.`
+            );
+          }
+          break;
+        }
+      }
+    }
+
     setError('');
 
     // If a bank is selected but has no rate record yet, auto-create it
@@ -170,10 +258,10 @@ export default function StatementPreview({ parsedData, onConfirm }) {
       currency,
       resolvedHeaders: headers,
       resolvedRows: rows,
-      openingBalance: parseFloat(openingBalance),
+      openingBalance: parsedBalance,
       periodStart,
       periodEnd,
-      bankInterestCharged: bankInterestCharged ? parseFloat(bankInterestCharged) : 0,
+      bankInterestCharged: bankInterestCharged ? parseNumeric(bankInterestCharged) : 0,
     });
   }
 
@@ -459,15 +547,31 @@ export default function StatementPreview({ parsedData, onConfirm }) {
             <label className="form-label">Opening Cleared Balance</label>
             <input
               className="form-input"
-              type="number"
-              step="0.01"
-              placeholder="e.g. -75290000"
+              type="text"
+              inputMode="numeric"
+              placeholder="e.g. -75,286,209.03"
               value={openingBalance}
-              onChange={e => setOpeningBalance(e.target.value)}
+              onChange={e => {
+                setOpeningBalance(e.target.value);
+                setAutoDetectedBalance(false);
+                setBalanceWarning('');
+              }}
             />
-            <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', marginTop: '4px', display: 'block' }}>
-              Enter as negative if overdrawn (e.g. -75,290,000)
-            </span>
+            {autoDetectedBalance && (
+              <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-success)', marginTop: '4px', display: 'block' }}>
+                Auto-detected from statement. Verify this is correct.
+              </span>
+            )}
+            {balanceWarning && (
+              <span style={{ fontSize: 'var(--font-size-xs)', color: '#e67e22', marginTop: '4px', display: 'block' }}>
+                {balanceWarning}
+              </span>
+            )}
+            {!autoDetectedBalance && !balanceWarning && (
+              <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', marginTop: '4px', display: 'block' }}>
+                Enter as negative if overdrawn (e.g. -75,290,000)
+              </span>
+            )}
           </div>
 
           <div className="form-group">
