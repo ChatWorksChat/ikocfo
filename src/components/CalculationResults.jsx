@@ -1,5 +1,139 @@
 import { useState } from 'react';
 import { formatPercent, formatCurrency, formatNumber, formatDate, formatDateRange } from '../lib/formatters.js';
+import * as XLSX from 'xlsx';
+
+function downloadAuditExcel(di, currency) {
+  const rows = di.dailySchedule.map(day => ({
+    'Value Date': day.date,
+    'Opening Bal': day.openingBalance,
+    'Credits': day.credits || 0,
+    'Debits': day.debits || 0,
+    'Closing Bal': day.closingBalance,
+    'OD Balance': day.odBalance || 0,
+    'Rate %': day.odBalance > 0 ? day.rate : '',
+    'Denom': day.odBalance > 0 ? day.denominator : '',
+    'Daily Interest': day.odBalance > 0 ? day.dailyInterest : 0,
+  }));
+  rows.push({
+    'Value Date': 'TOTALS',
+    'Opening Bal': '',
+    'Credits': di.dailySchedule.reduce((s, d) => s + d.credits, 0),
+    'Debits': di.dailySchedule.reduce((s, d) => s + d.debits, 0),
+    'Closing Bal': '',
+    'OD Balance': '',
+    'Rate %': '',
+    'Denom': '',
+    'Daily Interest': di.expectedInterest,
+  });
+
+  const summaryRows = [
+    { Metric: 'Expected OD Interest', Value: di.expectedInterest },
+    { Metric: 'Bank Interest Charged', Value: di.bankInterestCharged },
+    { Metric: 'Variance', Value: di.variance },
+    { Metric: 'Variance %', Value: `${di.variancePercent >= 0 ? '+' : ''}${di.variancePercent.toFixed(2)}%` },
+    { Metric: 'Avg Daily OD Balance', Value: di.avgDailyODBalance },
+    { Metric: 'Max Overdraft Used', Value: di.maxODBalance },
+    { Metric: 'Days in Overdraft', Value: `${di.daysInOverdraft} / ${di.totalDays}` },
+    { Metric: 'Annual Rate', Value: `${di.annualRate}%` },
+    { Metric: 'Day Count Basis', Value: di.dayCountBasis },
+    { Metric: 'Status', Value: di.status.toUpperCase() },
+  ];
+
+  const wb = XLSX.utils.book_new();
+  const wsSchedule = XLSX.utils.json_to_sheet(rows);
+  wsSchedule['!cols'] = [
+    { wch: 12 }, { wch: 16 }, { wch: 14 }, { wch: 14 },
+    { wch: 16 }, { wch: 14 }, { wch: 8 }, { wch: 6 }, { wch: 14 },
+  ];
+  XLSX.utils.book_append_sheet(wb, wsSchedule, 'Daily Audit Schedule');
+
+  const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+  wsSummary['!cols'] = [{ wch: 24 }, { wch: 20 }];
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+  XLSX.writeFile(wb, `Audit_Schedule_${di.dailySchedule[0]?.date || 'report'}.xlsx`);
+}
+
+function downloadAuditPDF(di, currency, statusCfg) {
+  const win = window.open('', '_blank');
+  if (!win) { alert('Please allow popups to download the PDF.'); return; }
+
+  const fc = (v) => {
+    if (v == null || isNaN(v)) return '--';
+    const abs = Math.abs(v);
+    const formatted = abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return v < 0 ? `-${formatted}` : formatted;
+  };
+
+  const scheduleRows = di.dailySchedule.map(day => {
+    const hasOD = day.odBalance > 0;
+    const bg = hasOD ? 'background:#fef2f2;' : '';
+    return `<tr style="${bg}">
+      <td>${day.date}</td>
+      <td class="r">${fc(day.openingBalance)}</td>
+      <td class="r" style="color:${day.credits > 0 ? '#16a34a' : '#000'}">${day.credits > 0 ? fc(day.credits) : '--'}</td>
+      <td class="r" style="color:${day.debits > 0 ? '#dc2626' : '#000'}">${day.debits > 0 ? fc(day.debits) : '--'}</td>
+      <td class="r" style="font-weight:600">${fc(day.closingBalance)}</td>
+      <td class="r" style="font-weight:${hasOD ? 700 : 400};color:${hasOD ? '#dc2626' : '#000'}">${hasOD ? fc(day.odBalance) : '--'}</td>
+      <td class="r">${hasOD ? day.rate.toFixed(2) + '%' : '--'}</td>
+      <td class="r">${hasOD ? day.denominator : '--'}</td>
+      <td class="r" style="font-weight:${hasOD ? 600 : 400}">${hasOD ? fc(day.dailyInterest) : '--'}</td>
+    </tr>`;
+  }).join('\n');
+
+  const totalCredits = fc(di.dailySchedule.reduce((s, d) => s + d.credits, 0));
+  const totalDebits = fc(di.dailySchedule.reduce((s, d) => s + d.debits, 0));
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Audit Schedule</title>
+<style>
+  @page { size: A4 landscape; margin: 12mm; }
+  body { font-family: Arial, sans-serif; font-size: 9px; color: #111; margin: 0; padding: 16px; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  .meta { font-size: 10px; color: #555; margin-bottom: 12px; }
+  .summary { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+  .scard { border: 1px solid #ddd; border-radius: 6px; padding: 8px 12px; min-width: 120px; }
+  .scard .val { font-size: 14px; font-weight: 700; }
+  .scard .lbl { font-size: 9px; color: #666; }
+  table { width: 100%; border-collapse: collapse; font-size: 8.5px; font-family: monospace; }
+  th { background: #f3f4f6; text-align: left; padding: 4px 6px; border-bottom: 2px solid #d1d5db; font-size: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 3px 6px; border-bottom: 1px solid #e5e7eb; }
+  .r { text-align: right; }
+  tfoot td { border-top: 2px solid #9ca3af; font-weight: 700; }
+  .status { display: inline-block; padding: 3px 12px; border-radius: 12px; color: #fff; font-weight: 700; font-size: 10px; }
+  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style></head><body>
+<h1>Daily Audit Schedule</h1>
+<div class="meta">Generated ${new Date().toLocaleDateString('en-GB')} &mdash; ${currency} &mdash; ${di.dayCountBasis}</div>
+
+<div class="summary">
+  <div class="scard"><div class="val">${fc(di.expectedInterest)}</div><div class="lbl">Expected OD Interest</div></div>
+  <div class="scard"><div class="val">${fc(di.bankInterestCharged)}</div><div class="lbl">Bank Interest Charged</div></div>
+  <div class="scard"><div class="val" style="color:${statusCfg.color}">${di.variance >= 0 ? '+' : ''}${fc(di.variance)} (${di.variancePercent >= 0 ? '+' : ''}${di.variancePercent.toFixed(2)}%)</div><div class="lbl">Variance</div></div>
+  <div class="scard"><span class="status" style="background:${statusCfg.color}">${statusCfg.label}</span></div>
+  <div class="scard"><div class="val">${fc(di.avgDailyODBalance)}</div><div class="lbl">Avg Daily OD Balance</div></div>
+  <div class="scard"><div class="val">${di.daysInOverdraft} / ${di.totalDays}</div><div class="lbl">Days in Overdraft</div></div>
+  <div class="scard"><div class="val">${di.annualRate.toFixed(2)}%</div><div class="lbl">Annual Rate</div></div>
+</div>
+
+<table>
+<thead><tr>
+  <th>Value Date</th><th class="r">Opening Bal</th><th class="r">Credits</th><th class="r">Debits</th>
+  <th class="r">Closing Bal</th><th class="r">OD Balance</th><th class="r">Rate %</th><th class="r">Denom</th><th class="r">Daily Interest</th>
+</tr></thead>
+<tbody>${scheduleRows}</tbody>
+<tfoot><tr>
+  <td>Totals</td><td></td><td class="r">${totalCredits}</td><td class="r">${totalDebits}</td>
+  <td></td><td></td><td></td><td></td><td class="r" style="color:#7c3aed">${fc(di.expectedInterest)}</td>
+</tr></tfoot>
+</table>
+
+<script>window.onload=function(){window.print();};</script>
+</body></html>`;
+
+  win.document.write(html);
+  win.document.close();
+}
 
 const STATUS_CONFIG = {
   matches: {
@@ -268,12 +402,28 @@ function DailyInterestView({
           onClick={() => setShowDailyTable(!showDailyTable)}
         >
           <h3 style={{ marginBottom: 0 }}>Daily Audit Schedule</h3>
-          <button
-            className="btn btn-sm btn-outline"
-            style={{ fontSize: 'var(--font-size-xs)' }}
-          >
-            {showDailyTable ? 'Collapse' : 'Expand'} ({formatNumber(di.dailySchedule.length)} days)
-          </button>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button
+              className="btn btn-sm btn-outline"
+              style={{ fontSize: 'var(--font-size-xs)' }}
+              onClick={(e) => { e.stopPropagation(); downloadAuditExcel(di, currency); }}
+            >
+              Excel
+            </button>
+            <button
+              className="btn btn-sm btn-outline"
+              style={{ fontSize: 'var(--font-size-xs)' }}
+              onClick={(e) => { e.stopPropagation(); downloadAuditPDF(di, currency, statusCfg); }}
+            >
+              PDF
+            </button>
+            <button
+              className="btn btn-sm btn-outline"
+              style={{ fontSize: 'var(--font-size-xs)' }}
+            >
+              {showDailyTable ? 'Collapse' : 'Expand'} ({formatNumber(di.dailySchedule.length)} days)
+            </button>
+          </div>
         </div>
 
         {showDailyTable && (
@@ -281,7 +431,7 @@ function DailyInterestView({
             <table style={{ fontSize: 'var(--font-size-xs)', whiteSpace: 'nowrap' }}>
               <thead>
                 <tr>
-                  <th>Date</th>
+                  <th>Value Date</th>
                   <th style={{ textAlign: 'right' }}>Opening Bal</th>
                   <th style={{ textAlign: 'right' }}>Credits</th>
                   <th style={{ textAlign: 'right' }}>Debits</th>
