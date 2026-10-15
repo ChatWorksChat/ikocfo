@@ -68,7 +68,10 @@ export function validateMapping(columnMapping) {
 
 // --- Transaction Classification ---
 
-const INTEREST_PATTERN = /(\d+):Int\.Coll:/i;
+// Match account-prefixed interest entries like "1234567:Int.Coll:..."
+// Use relaxed pattern (Int\.C) because PDF text wrapping can truncate the
+// description mid-word (e.g., "00504164746350:Int.C" when "oll:..." wraps).
+const INTEREST_PATTERN = /(\d+):Int\.C/i;
 const GENERIC_INTEREST_PATTERNS = [
   /\binterest\s*charged\b/i,
   /\bod\s*interest\b/i,
@@ -240,8 +243,10 @@ export function classifyWithTemplate(transactions, template) {
       return classified.map(tx => {
         if (tx.classification === 'regular') {
           const desc = (tx.description || '').toUpperCase();
+          const fullText = Object.values(tx).filter(v => typeof v === 'string').join(' ').toUpperCase();
           for (const feeKey of feePatterns) {
-            if (desc.includes(feeKey.toUpperCase())) {
+            const fk = feeKey.toUpperCase();
+            if (desc.includes(fk) || fullText.includes(fk)) {
               return { ...tx, classification: 'fee' };
             }
           }
@@ -315,25 +320,15 @@ export function classifyWithTemplate(transactions, template) {
 export function detectBankFromTemplate(rawRows, headerRowIdx, templates) {
   if (!templates || templates.length === 0) return null;
 
-  // Build a text pool from preamble + headers + first few data rows
-  const preambleRows = rawRows.slice(0, headerRowIdx);
+  // Build a text pool from ALL rows — some banks (e.g., I&M) place their name
+  // in footer/additional-info sections below the transaction data.
   const headerRow = rawRows[headerRowIdx] || [];
-  const firstDataRows = rawRows.slice(headerRowIdx + 1, headerRowIdx + 6);
-
-  const preambleText = preambleRows
-    .map(row => row.map(cell => String(cell || '')).join(' '))
-    .join(' ')
-    .toUpperCase();
-
   const headerTexts = headerRow.map(cell => String(cell || '').trim());
-  const headerTextUpper = headerTexts.join(' ').toUpperCase();
 
-  const dataText = firstDataRows
+  const combinedText = rawRows
     .map(row => row.map(cell => String(cell || '')).join(' '))
     .join(' ')
     .toUpperCase();
-
-  const combinedText = preambleText + ' ' + headerTextUpper + ' ' + dataText;
 
   let bestMatch = null;
   let bestScore = 0;

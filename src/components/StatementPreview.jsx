@@ -252,9 +252,8 @@ export default function StatementPreview({ parsedData, onConfirm }) {
         }
       }
 
-      // Also scan preamble for stated interest totals
+      // Also scan preamble AND summary rows for stated interest totals
       if (detectedInterest === 0) {
-        const preamble = rawRows.slice(0, headerRowIdx);
         const interestPreamblePatterns = [
           /interest\s*charged\s*:?\s*/i,
           /total\s*interest\s*:?\s*/i,
@@ -262,7 +261,10 @@ export default function StatementPreview({ parsedData, onConfirm }) {
           /overdraft\s*interest\s*:?\s*/i,
           /debit(or)?\s*interest\s*:?\s*/i,
         ];
-        for (const row of preamble) {
+        // Check preamble (above header) and summary rows (all rows, since
+        // some banks place summaries below transaction data)
+        const searchRows = rawRows;
+        for (const row of searchRows) {
           const rowText = row.map(c => String(c || '')).join(' ');
           if (interestPreamblePatterns.some(p => p.test(rowText))) {
             // Extract the last numeric value from matching row (typically the amount)
