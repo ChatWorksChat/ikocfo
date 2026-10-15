@@ -69,16 +69,37 @@ export function validateMapping(columnMapping) {
 // --- Transaction Classification ---
 
 const INTEREST_PATTERN = /(\d+):Int\.Coll:/i;
+const GENERIC_INTEREST_PATTERNS = [
+  /\binterest\s*charged\b/i,
+  /\bod\s*interest\b/i,
+  /\boverdraft\s*interest\b/i,
+  /\bint(erest)?\s*debit\b/i,
+  /\bdebit(or)?\s*interest/i,
+  /\binterest\s*on\s*(od|overdraft|overdrawn)/i,
+  /\bint\s*charg(ed|e|es)\b/i,
+  /\binterest\s*applied\b/i,
+  /\baccrue?d?\s*interest\b/i,
+  /\bfinance\s*charge/i,
+];
 const FEE_PATTERNS = [
   /ledger\s*fee/i,
   /excise\s*duty/i,
+  /excise\s*tax/i,
   /commitment\s*fee/i,
+  /commitment\s*commission/i,
   /standing\s*instruction/i,
   /swift\s*charges?/i,
   /service\s*charge/i,
   /commission/i,
   /arrangement\s*fee/i,
   /facility\s*fee/i,
+  /acct?\s*maintenance/i,
+  /account\s*maintenance/i,
+  /inward\s*eft.*fees/i,
+  /transaction\s*fee/i,
+  /appraisal\s*fee/i,
+  /insurance\s*premium/i,
+  /stamp\s*duty/i,
 ];
 const LOAN_RECOVERY_PATTERN = /\d+:Loan\s*Recovery:/i;
 
@@ -114,6 +135,9 @@ export function classifyTransactions(transactions) {
     primaryAccount = acctNums.sort((a, b) => a.length - b.length)[0];
   }
 
+  // Check if any Int.Coll-style entries were found — if not, use generic patterns
+  const hasAccountPrefixed = acctNums.length > 0;
+
   // Second pass: classify each transaction
   return transactions.map(tx => {
     const desc = (tx.description || '').trim();
@@ -124,9 +148,21 @@ export function classifyTransactions(transactions) {
       classification = intMatch[1] === primaryAccount
         ? 'overdraft_interest'
         : 'other_facility_interest';
-    } else if (LOAN_RECOVERY_PATTERN.test(desc)) {
+    } else if (!hasAccountPrefixed) {
+      // No Int.Coll entries found — try generic interest patterns
+      for (const pattern of GENERIC_INTEREST_PATTERNS) {
+        if (pattern.test(desc)) {
+          classification = 'overdraft_interest';
+          break;
+        }
+      }
+    }
+
+    if (classification === 'regular' && LOAN_RECOVERY_PATTERN.test(desc)) {
       classification = 'loan_recovery';
-    } else {
+    }
+
+    if (classification === 'regular') {
       for (const pattern of FEE_PATTERNS) {
         if (pattern.test(desc)) {
           classification = 'fee';

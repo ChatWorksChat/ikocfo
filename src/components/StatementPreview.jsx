@@ -154,40 +154,129 @@ export default function StatementPreview({ parsedData, onConfirm }) {
     }
   }, [headers, rows, bankRates, matchedTemplate]);
 
-  // Auto-detect period dates, bank interest charged when column mapping changes
+  // Auto-detect period dates, bank interest charged, opening balance when mapping changes
   useEffect(() => {
     const mapping = columnMapping;
     if (!mapping || Object.keys(mapping).length === 0) return;
 
-    // Derive period date range from parsed dates
+    const fmt = (d) => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+
+    // --- Period dates ---
+    // Strategy: (1) scan preamble for explicit period info, (2) fall back to date range from data rows
     const dateCol = Object.entries(mapping).find(([, t]) => t === 'date')?.[0];
-    if (dateCol) {
-      const dates = rows
-        .map(r => parseDate(r[dateCol]))
-        .filter(d => d !== null)
-        .sort((a, b) => a - b);
-      if (dates.length > 0) {
-        const start = dates[0];
-        const end = dates[dates.length - 1];
-        // Format as YYYY-MM-DD for date input
-        const fmt = (d) => {
-          const y = d.getFullYear();
-          const m = String(d.getMonth() + 1).padStart(2, '0');
-          const day = String(d.getDate()).padStart(2, '0');
-          return `${y}-${m}-${day}`;
-        };
-        if (!periodStart) setPeriodStart(fmt(start));
-        if (!periodEnd) setPeriodEnd(fmt(end));
+    const valueDateCol = Object.entries(mapping).find(([, t]) => t === 'valueDate')?.[0];
+
+    if (!periodStart || !periodEnd) {
+      let detectedStart = null;
+      let detectedEnd = null;
+
+      // (1) Scan preamble for explicit period/date range text
+      const preamble = rawRows.slice(0, headerRowIdx);
+      const periodPatterns = [
+        /(?:period|statement)\s*(?:from|:)\s*/i,
+        /(?:from|start)\s*(?:date)?\s*:?\s*/i,
+        /(?:date)\s*(?:from)\s*:?\s*/i,
+      ];
+      const dateExtractPattern = /(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}|\d{4}[/\-\.]\d{1,2}[/\-\.]\d{1,2}|\d{1,2}[\s\-]*[A-Za-z]{3,9}[\s\-]*\d{2,4})/g;
+
+      for (const row of preamble) {
+        const rowText = row.map(c => String(c || '')).join(' ');
+        const isRelevant = periodPatterns.some(p => p.test(rowText)) ||
+          /statement\s*(period|date)/i.test(rowText);
+        if (isRelevant) {
+          // Extract all date-like strings from this row
+          const dateMatches = rowText.match(dateExtractPattern);
+          if (dateMatches && dateMatches.length >= 2) {
+            const d1 = parseDate(dateMatches[0]);
+            const d2 = parseDate(dateMatches[dateMatches.length - 1]);
+            if (d1 && d2) {
+              detectedStart = d1 < d2 ? d1 : d2;
+              detectedEnd = d1 < d2 ? d2 : d1;
+              break;
+            }
+          } else if (dateMatches && dateMatches.length === 1) {
+            // Single date — check for "to" or "end" on a nearby row
+            const d = parseDate(dateMatches[0]);
+            if (d) {
+              if (/\b(from|start)\b/i.test(rowText)) detectedStart = d;
+              else if (/\b(to|end|through)\b/i.test(rowText)) detectedEnd = d;
+            }
+          }
+        }
       }
+
+      // (2) Fall back to transaction date range
+      if (!detectedStart || !detectedEnd) {
+        // Collect dates from both date and valueDate columns
+        const allDates = [];
+        for (const r of rows) {
+          if (dateCol) { const d = parseDate(r[dateCol]); if (d) allDates.push(d); }
+          if (valueDateCol) { const d = parseDate(r[valueDateCol]); if (d) allDates.push(d); }
+        }
+        allDates.sort((a, b) => a - b);
+        if (allDates.length > 0) {
+          if (!detectedStart) detectedStart = allDates[0];
+          if (!detectedEnd) detectedEnd = allDates[allDates.length - 1];
+        }
+      }
+
+      if (detectedStart && !periodStart) setPeriodStart(fmt(detectedStart));
+      if (detectedEnd && !periodEnd) setPeriodEnd(fmt(detectedEnd));
     }
 
-    // Auto-detect bank interest charged from classified transactions
+    // --- Bank interest charged ---
+    // Strategy: (1) classify transactions and sum interest debits, (2) check mapped interest column,
+    //           (3) scan preamble for stated interest total
     try {
       const mapped = applyMapping(rows, mapping);
       const classified = matchedTemplate
         ? classifyWithTemplate(mapped, matchedTemplate)
         : classifyTransactions(mapped);
-      const detectedInterest = detectBankInterestCharged(classified);
+      let detectedInterest = detectBankInterestCharged(classified);
+
+      // Also check mapped interest column (if any)
+      if (detectedInterest === 0) {
+        const interestCol = Object.entries(mapping).find(([, t]) => t === 'interest')?.[0];
+        if (interestCol) {
+          for (const row of rows) {
+            const val = parseNumeric(row[interestCol]);
+            if (val > 0) detectedInterest += val;
+          }
+        }
+      }
+
+      // Also scan preamble for stated interest totals
+      if (detectedInterest === 0) {
+        const preamble = rawRows.slice(0, headerRowIdx);
+        const interestPreamblePatterns = [
+          /interest\s*charged\s*:?\s*/i,
+          /total\s*interest\s*:?\s*/i,
+          /od\s*interest\s*:?\s*/i,
+          /overdraft\s*interest\s*:?\s*/i,
+          /debit(or)?\s*interest\s*:?\s*/i,
+        ];
+        for (const row of preamble) {
+          const rowText = row.map(c => String(c || '')).join(' ');
+          if (interestPreamblePatterns.some(p => p.test(rowText))) {
+            // Extract the last numeric value from matching row (typically the amount)
+            const cells = [...row].reverse();
+            for (const cell of cells) {
+              const val = parseNumeric(cell);
+              if (val > 0) {
+                detectedInterest = val;
+                break;
+              }
+            }
+            if (detectedInterest > 0) break;
+          }
+        }
+      }
+
       if (detectedInterest > 0 && !bankInterestCharged) {
         setBankInterestCharged(String(detectedInterest.toFixed(2)));
         setAutoDetectedInterest(true);
@@ -196,7 +285,9 @@ export default function StatementPreview({ parsedData, onConfirm }) {
       // Silently ignore classification errors during auto-detection
     }
 
-    // Auto-detect opening balance using template method or defaults
+    // --- Opening balance ---
+    // Strategy: (1) scan preamble for "opening balance" label, (2) scan data for B/F rows,
+    //           (3) derive from first transaction's balance
     try {
       const descCol = Object.entries(mapping).find(([, t]) => t === 'description')?.[0];
       const balCol = Object.entries(mapping).find(([, t]) => t === 'balance')?.[0];
@@ -209,19 +300,33 @@ export default function StatementPreview({ parsedData, onConfirm }) {
         const obMethod = matchedTemplate?.openingBalanceMethod || 'auto';
         const obPattern = matchedTemplate?.openingBalancePattern || '';
 
-        if (obMethod === 'preamble' && obPattern) {
-          // Scan preamble rows for the opening balance pattern
+        // (1) Always scan preamble for opening balance keywords
+        const preambleOBPatterns = [
+          /opening\s*bal(ance)?/i,
+          /balance\s*b\.?\/?f\.?\b/i,
+          /brought?\s*f(or)?w/i,
+        ];
+        if (obPattern) {
+          preambleOBPatterns.unshift(new RegExp(obPattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
+        }
+
+        if (obMethod === 'preamble' || obMethod === 'auto') {
           const preambleRows = rawRows.slice(0, headerRowIdx);
-          const patternUpper = obPattern.toUpperCase();
           for (const row of preambleRows) {
             const rowText = row.map(c => String(c || '')).join(' ');
-            if (rowText.toUpperCase().includes(patternUpper)) {
-              // Try to extract numeric value from the row
-              for (const cell of row) {
-                const val = parseNumeric(cell);
-                if (val !== 0) {
-                  detected = val;
-                  break;
+            if (preambleOBPatterns.some(p => p.test(rowText))) {
+              // Pick the last numeric cell on the row (most likely the balance amount,
+              // avoiding account numbers which typically appear earlier)
+              const cells = [...row].reverse();
+              for (const cell of cells) {
+                const cellStr = String(cell || '').trim();
+                // Must look like a monetary value (has digit, optionally with commas/decimals/minus)
+                if (/^-?[\d,]+\.?\d*$/.test(cellStr.replace(/\s/g, '')) || /^-?\d[\d,]*(\.\d+)?$/.test(cellStr.replace(/\s/g, ''))) {
+                  const val = parseNumeric(cell);
+                  if (val !== 0) {
+                    detected = val;
+                    break;
+                  }
                 }
               }
               if (detected != null) break;
@@ -229,8 +334,8 @@ export default function StatementPreview({ parsedData, onConfirm }) {
           }
         }
 
+        // (2) Scan data rows for B/F / Opening Balance descriptions
         if (detected == null && (obMethod === 'brought_forward' || obMethod === 'auto')) {
-          // Look for "Brought Forward" / "B/F" / "Opening Balance" rows in data
           if (descCol) {
             const bfPatterns = [/brought?\s*f(or)?w/i, /\bb\.?\/?f\.?\b/i, /opening\s*bal/i, /balance\s*b\.?\/?f/i];
             if (obPattern) {
@@ -249,7 +354,7 @@ export default function StatementPreview({ parsedData, onConfirm }) {
           }
         }
 
-        // Method: Derive from first dated transaction (balance - credit + debit = opening)
+        // (3) Derive from first dated transaction: opening = balance - credit + debit
         if (detected == null && (obMethod === 'first_transaction' || obMethod === 'auto') && dateColKey) {
           for (const row of rows) {
             if (!parseDate(row[dateColKey])) continue;
