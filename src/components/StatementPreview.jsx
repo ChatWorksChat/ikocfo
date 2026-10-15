@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
-import { autoDetectColumns, detectBank, applyMapping, classifyTransactions } from '../lib/statementMapper.js';
+import { autoDetectColumns, detectBank, applyMapping, classifyTransactions, classifyWithTemplate, detectBankFromTemplate } from '../lib/statementMapper.js';
 import { COLUMN_TYPES, CURRENCIES, KENYA_BANKS } from '../lib/constants.js';
-import { fetchBankRates, addBankRate } from '../lib/auth.js';
+import { fetchBankRates, addBankRate, fetchBankTemplates, saveBankTemplate } from '../lib/auth.js';
 import { parseDate, parseNumeric } from '../lib/formatters.js';
 import { detectBankInterestCharged } from '../lib/dailyInterestCalculator.js';
 
 export default function StatementPreview({ parsedData, onConfirm }) {
-  const { rawRows, headerRowIndex: initialHeaderRow } = parsedData;
+  const { rawRows: originalRawRows, headerRowIndex: initialHeaderRow } = parsedData;
 
   const [headerRowIdx, setHeaderRowIdx] = useState(initialHeaderRow);
   const [columnMapping, setColumnMapping] = useState({});
@@ -16,6 +16,8 @@ export default function StatementPreview({ parsedData, onConfirm }) {
   const [detectedBank, setDetectedBank] = useState(null);
   const [selectedBank, setSelectedBank] = useState('');
   const [bankRates, setBankRates] = useState([]);
+  const [bankTemplates, setBankTemplates] = useState([]);
+  const [matchedTemplate, setMatchedTemplate] = useState(null);
   const [error, setError] = useState('');
 
   // New fields for daily interest calculation
@@ -26,6 +28,49 @@ export default function StatementPreview({ parsedData, onConfirm }) {
   const [autoDetectedInterest, setAutoDetectedInterest] = useState(false);
   const [autoDetectedBalance, setAutoDetectedBalance] = useState(false);
   const [balanceWarning, setBalanceWarning] = useState('');
+
+  // Apply template-based transformations to raw rows:
+  // - Reverse rows for reverse_chronological templates
+  // - Filter out multiPageRepeatRow duplicates
+  // - Filter out closingMarkers rows
+  const rawRows = useMemo(() => {
+    if (!matchedTemplate) return originalRawRows;
+
+    const hIdx = initialHeaderRow;
+    const preamble = originalRawRows.slice(0, hIdx + 1);
+    let dataRows = originalRawRows.slice(hIdx + 1);
+
+    // Reverse data rows if template says reverse_chronological
+    if (matchedTemplate.transactionOrder === 'reverse_chronological') {
+      dataRows = [...dataRows].reverse();
+    }
+
+    // Filter out multiPageRepeatRow duplicates (keep only first occurrence)
+    if (matchedTemplate.multiPageRepeatRow) {
+      const marker = matchedTemplate.multiPageRepeatRow.toUpperCase();
+      let seen = false;
+      dataRows = dataRows.filter(row => {
+        const rowText = row.map(c => String(c || '')).join(' ').toUpperCase();
+        if (rowText.includes(marker)) {
+          if (seen) return false; // Remove duplicate
+          seen = true;
+        }
+        return true;
+      });
+    }
+
+    // Filter out closingMarkers rows
+    const closingMarkers = matchedTemplate.closingMarkers || [];
+    if (closingMarkers.length > 0) {
+      const markersUpper = closingMarkers.map(m => m.toUpperCase());
+      dataRows = dataRows.filter(row => {
+        const rowText = row.map(c => String(c || '')).join(' ').toUpperCase();
+        return !markersUpper.some(marker => rowText.includes(marker));
+      });
+    }
+
+    return [...preamble, ...dataRows];
+  }, [originalRawRows, matchedTemplate, initialHeaderRow]);
 
   // Derive headers and data rows from rawRows + headerRowIdx
   const { headers, rows } = useMemo(() => {
@@ -51,16 +96,50 @@ export default function StatementPreview({ parsedData, onConfirm }) {
     return { headers: h, rows: nonEmpty };
   }, [rawRows, headerRowIdx]);
 
-  // Fetch bank rates from API on mount
+  // Fetch bank rates and templates from API on mount
   useEffect(() => {
     fetchBankRates().then(res => {
       if (res.success) setBankRates(res.rates);
     });
+    fetchBankTemplates().then(res => {
+      if (res.success) setBankTemplates(res.templates);
+    });
   }, []);
+
+  // Template detection: run once when templates are loaded
+  useEffect(() => {
+    if (bankTemplates.length > 0 && !matchedTemplate) {
+      const template = detectBankFromTemplate(originalRawRows, initialHeaderRow, bankTemplates);
+      if (template) {
+        setMatchedTemplate(template);
+        if (template.currency) setCurrency(template.currency);
+      }
+    }
+  }, [bankTemplates, originalRawRows, initialHeaderRow]);
 
   // Re-run auto-detection whenever headers or bankRates change
   useEffect(() => {
-    setColumnMapping(autoDetectColumns(headers));
+    // If a template matched, apply its column mapping instead of auto-detect
+    if (matchedTemplate && matchedTemplate.columnMapping) {
+      const tplMapping = matchedTemplate.columnMapping;
+      // Build mapping from current headers to template types
+      const mapping = {};
+      for (const h of headers) {
+        if (tplMapping[h]) {
+          mapping[h] = tplMapping[h];
+        }
+      }
+      // Fill any unmapped headers with auto-detect fallback
+      const autoMapping = autoDetectColumns(headers);
+      for (const h of headers) {
+        if (!mapping[h]) {
+          mapping[h] = autoMapping[h] || 'ignore';
+        }
+      }
+      setColumnMapping(mapping);
+    } else {
+      setColumnMapping(autoDetectColumns(headers));
+    }
 
     if (bankRates.length > 0) {
       const bank = detectBank(rows, headers, bankRates);
@@ -73,7 +152,7 @@ export default function StatementPreview({ parsedData, onConfirm }) {
         setDetectedBank(null);
       }
     }
-  }, [headers, rows, bankRates]);
+  }, [headers, rows, bankRates, matchedTemplate]);
 
   // Auto-detect period dates, bank interest charged when column mapping changes
   useEffect(() => {
@@ -105,7 +184,9 @@ export default function StatementPreview({ parsedData, onConfirm }) {
     // Auto-detect bank interest charged from classified transactions
     try {
       const mapped = applyMapping(rows, mapping);
-      const classified = classifyTransactions(mapped);
+      const classified = matchedTemplate
+        ? classifyWithTemplate(mapped, matchedTemplate)
+        : classifyTransactions(mapped);
       const detectedInterest = detectBankInterestCharged(classified);
       if (detectedInterest > 0 && !bankInterestCharged) {
         setBankInterestCharged(String(detectedInterest.toFixed(2)));
@@ -115,7 +196,7 @@ export default function StatementPreview({ parsedData, onConfirm }) {
       // Silently ignore classification errors during auto-detection
     }
 
-    // Auto-detect opening balance from "Brought Forward" / "B/F" rows or first transaction
+    // Auto-detect opening balance using template method or defaults
     try {
       const descCol = Object.entries(mapping).find(([, t]) => t === 'description')?.[0];
       const balCol = Object.entries(mapping).find(([, t]) => t === 'balance')?.[0];
@@ -125,24 +206,51 @@ export default function StatementPreview({ parsedData, onConfirm }) {
 
       if (balCol && !openingBalance) {
         let detected = null;
+        const obMethod = matchedTemplate?.openingBalanceMethod || 'auto';
+        const obPattern = matchedTemplate?.openingBalancePattern || '';
 
-        // Method 1: Look for "Brought Forward" / "B/F" / "Opening Balance" rows
-        if (descCol) {
-          const bfPatterns = [/brought?\s*f(or)?w/i, /\bb\.?\/?f\.?\b/i, /opening\s*bal/i, /balance\s*b\.?\/?f/i];
-          for (const row of rows) {
-            const desc = String(row[descCol] || '');
-            if (bfPatterns.some(p => p.test(desc))) {
-              const bal = parseNumeric(row[balCol]);
-              if (bal !== 0) {
-                detected = bal;
-                break;
+        if (obMethod === 'preamble' && obPattern) {
+          // Scan preamble rows for the opening balance pattern
+          const preambleRows = rawRows.slice(0, headerRowIdx);
+          const patternUpper = obPattern.toUpperCase();
+          for (const row of preambleRows) {
+            const rowText = row.map(c => String(c || '')).join(' ');
+            if (rowText.toUpperCase().includes(patternUpper)) {
+              // Try to extract numeric value from the row
+              for (const cell of row) {
+                const val = parseNumeric(cell);
+                if (val !== 0) {
+                  detected = val;
+                  break;
+                }
+              }
+              if (detected != null) break;
+            }
+          }
+        }
+
+        if (detected == null && (obMethod === 'brought_forward' || obMethod === 'auto')) {
+          // Look for "Brought Forward" / "B/F" / "Opening Balance" rows in data
+          if (descCol) {
+            const bfPatterns = [/brought?\s*f(or)?w/i, /\bb\.?\/?f\.?\b/i, /opening\s*bal/i, /balance\s*b\.?\/?f/i];
+            if (obPattern) {
+              bfPatterns.unshift(new RegExp(obPattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
+            }
+            for (const row of rows) {
+              const desc = String(row[descCol] || '');
+              if (bfPatterns.some(p => p.test(desc))) {
+                const bal = parseNumeric(row[balCol]);
+                if (bal !== 0) {
+                  detected = bal;
+                  break;
+                }
               }
             }
           }
         }
 
-        // Method 2: Derive from first dated transaction (balance - credit + debit = opening)
-        if (detected == null && dateColKey) {
+        // Method: Derive from first dated transaction (balance - credit + debit = opening)
+        if (detected == null && (obMethod === 'first_transaction' || obMethod === 'auto') && dateColKey) {
           for (const row of rows) {
             if (!parseDate(row[dateColKey])) continue;
             const bal = parseNumeric(row[balCol]);
@@ -163,7 +271,7 @@ export default function StatementPreview({ parsedData, onConfirm }) {
     } catch {
       // Silently ignore detection errors
     }
-  }, [columnMapping, rows]);
+  }, [columnMapping, rows, matchedTemplate]);
 
   function handleMappingChange(header, type) {
     setColumnMapping(prev => ({ ...prev, [header]: type }));
@@ -251,6 +359,19 @@ export default function StatementPreview({ parsedData, onConfirm }) {
       });
     }
 
+    // If a template was matched, save updated column mapping back to the template
+    if (matchedTemplate) {
+      try {
+        await saveBankTemplate({
+          ...matchedTemplate,
+          columnMapping,
+          columnHeaders: headers,
+        });
+      } catch {
+        // Non-blocking — template update is best-effort
+      }
+    }
+
     onConfirm({
       columnMapping,
       nominalRate: parseFloat(nominalRate),
@@ -262,6 +383,7 @@ export default function StatementPreview({ parsedData, onConfirm }) {
       periodStart,
       periodEnd,
       bankInterestCharged: bankInterestCharged ? parseNumeric(bankInterestCharged) : 0,
+      matchedTemplate: matchedTemplate || null,
     });
   }
 
@@ -277,7 +399,14 @@ export default function StatementPreview({ parsedData, onConfirm }) {
         The header row is highlighted in purple. Rows above it are statement preamble and will be excluded from the analysis. Adjust if needed.
       </p>
 
-      {detectedBank && (
+      {matchedTemplate && (
+        <div className="alert alert-success" style={{ marginBottom: '16px' }}>
+          Detected bank: <strong>{matchedTemplate.bankName}</strong> (template-matched)
+          {matchedTemplate.transactionOrder === 'reverse_chronological' && ' — rows reversed to chronological order'}
+        </div>
+      )}
+
+      {detectedBank && !matchedTemplate && (
         <div className="alert alert-success" style={{ marginBottom: '16px' }}>
           Detected bank: <strong>{detectedBank.name}</strong> — nominal OD rate pre-filled at {detectedBank.odAPR}%.
         </div>

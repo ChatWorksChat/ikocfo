@@ -12,7 +12,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 
 // Patterns that indicate a row is a column header (not preamble)
 const HEADER_PATTERNS = [
-  /^date$/i, /posting\s*date/i, /trans(action)?\s*date/i, /^txn\s*date$/i,
+  /^date$/i, /posting\s*date/i, /trans(action)?\s*date/i, /^txn\s*date$/i, /^op\.?\s*date$/i,
   /^value$/i, /value\s*date/i,
   /^desc/i, /narrative/i, /particulars/i, /details/i, /^narration$/i,
   /^debit/i, /^dr$/i, /withdrawal/i,

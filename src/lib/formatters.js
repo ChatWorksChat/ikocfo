@@ -61,6 +61,15 @@ export function parseDate(value) {
     if (!isNaN(d.getTime())) return d;
   }
 
+  // Try DD/MM/YY or DD-MM-YY (2-digit year)
+  const dmy2 = str.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2})$/);
+  if (dmy2) {
+    const yy = parseInt(dmy2[3]);
+    const fullYear = yy < 50 ? 2000 + yy : 1900 + yy;
+    const d = new Date(fullYear, parseInt(dmy2[2]) - 1, parseInt(dmy2[1]));
+    if (!isNaN(d.getTime())) return d;
+  }
+
   // Try YYYY-MM-DD
   const ymd = str.match(/^(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})$/);
   if (ymd) {

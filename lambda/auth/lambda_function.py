@@ -1666,6 +1666,216 @@ def handle_delete_bank_rate(rate_id):
         return response(500, {'error': 'Failed to delete bank rate.'})
 
 
+# --- Bank Template Comprehension ---
+
+SEED_BANK_TEMPLATES = [
+    {
+        'email': 'banktemplate#victoria-commercial-bank',
+        'bankName': 'Victoria Commercial Bank Limited',
+        'bankSlug': 'victoria-commercial-bank',
+        'aliases': json.dumps(['Victoria Commercial Bank', 'VCB', 'victoriabank.co.ke']),
+        'columnHeaders': json.dumps(['DATE', 'VALUE', 'PARTICULARS', 'CHQ/REF', 'DEBIT', 'CREDIT', 'BALANCE']),
+        'columnMapping': json.dumps({'DATE': 'date', 'VALUE': 'valueDate', 'PARTICULARS': 'description', 'CHQ/REF': 'ignore', 'DEBIT': 'debit', 'CREDIT': 'credit', 'BALANCE': 'balance'}),
+        'dateFormats': json.dumps(['DD-MMM-YYYY']),
+        'interestPatterns': json.dumps([{'regex': '\\d+:Int\\.Coll:', 'classification': 'account_prefixed'}]),
+        'feePatterns': json.dumps(['Ledger Fee', 'Excise duty', 'Standing Instruction', 'SWIFT CHARGES', 'COMMITMENT FEE']),
+        'openingBalanceMethod': 'brought_forward',
+        'openingBalancePattern': 'Brought Forward',
+        'transactionOrder': 'chronological',
+        'multiPageRepeatRow': 'Brought Forward',
+        'closingMarkers': json.dumps(['Grand Total', 'Unclear Balance', 'Ledger Balance']),
+        'currency': 'KES',
+        'statementCount': 0,
+    },
+    {
+        'email': 'banktemplate#i-and-m-bank',
+        'bankName': 'I & M Bank Limited',
+        'bankSlug': 'i-and-m-bank',
+        'aliases': json.dumps(['I&M Bank', 'I & M Bank', 'I & M Bank Limited', 'I&M']),
+        'columnHeaders': json.dumps(['Transaction date', 'Value date', 'Description/Narration', 'Transaction reference', 'Withdrawal', 'Deposit', 'Balance']),
+        'columnMapping': json.dumps({'Transaction date': 'date', 'Value date': 'valueDate', 'Description/Narration': 'description', 'Transaction reference': 'ignore', 'Withdrawal': 'debit', 'Deposit': 'credit', 'Balance': 'balance'}),
+        'dateFormats': json.dumps(['DD-MMM-YYYY']),
+        'interestPatterns': json.dumps([{'regex': '\\d+:Int\\.Coll:', 'classification': 'account_prefixed'}]),
+        'feePatterns': json.dumps(['CHARGE ACCT MAINTENANCE', 'EXCISE DUTY']),
+        'openingBalanceMethod': 'preamble',
+        'openingBalancePattern': 'Opening balance',
+        'transactionOrder': 'chronological',
+        'multiPageRepeatRow': '',
+        'closingMarkers': json.dumps([]),
+        'currency': 'KES',
+        'statementCount': 0,
+    },
+    {
+        'email': 'banktemplate#bank-of-africa',
+        'bankName': 'Bank of Africa Ltd',
+        'bankSlug': 'bank-of-africa',
+        'aliases': json.dumps(['BANK OF AFRICA', 'BOA', 'BANK OF AFRICA - KENYA', 'BANK OF AFRICA -  KENYA']),
+        'columnHeaders': json.dumps(['Op. Date', 'Description', 'Reference', 'Value date', 'Debit', 'Credit', 'Running balance']),
+        'columnMapping': json.dumps({'Op. Date': 'date', 'Description': 'description', 'Reference': 'ignore', 'Value date': 'valueDate', 'Debit': 'debit', 'Credit': 'credit', 'Running balance': 'balance'}),
+        'dateFormats': json.dumps(['DD/MM/YY', 'DD/MM/YYYY']),
+        'interestPatterns': json.dumps([{'keyword': 'DEBITOR INTERESTS', 'classification': 'overdraft_interest'}, {'keyword': 'REVERSAL OF DEBITOR INTEREST', 'classification': 'interest_reversal'}]),
+        'feePatterns': json.dumps(['COMMITMENT COMMISSION', 'EXCISE TAX']),
+        'openingBalanceMethod': 'preamble',
+        'openingBalancePattern': 'Opening balance',
+        'transactionOrder': 'reverse_chronological',
+        'multiPageRepeatRow': '',
+        'closingMarkers': json.dumps([]),
+        'currency': 'KES',
+        'statementCount': 0,
+    },
+]
+
+
+def _parse_template_item(item):
+    """Convert a DynamoDB template item to API response format."""
+    def _safe_json(val):
+        if isinstance(val, str):
+            try:
+                return json.loads(val)
+            except (json.JSONDecodeError, ValueError):
+                return val
+        return val
+
+    return {
+        'bankSlug': item.get('bankSlug', ''),
+        'bankName': item.get('bankName', ''),
+        'aliases': _safe_json(item.get('aliases', '[]')),
+        'columnHeaders': _safe_json(item.get('columnHeaders', '[]')),
+        'columnMapping': _safe_json(item.get('columnMapping', '{}')),
+        'dateFormats': _safe_json(item.get('dateFormats', '[]')),
+        'interestPatterns': _safe_json(item.get('interestPatterns', '[]')),
+        'feePatterns': _safe_json(item.get('feePatterns', '[]')),
+        'openingBalanceMethod': item.get('openingBalanceMethod', 'first_transaction'),
+        'openingBalancePattern': item.get('openingBalancePattern', ''),
+        'transactionOrder': item.get('transactionOrder', 'chronological'),
+        'multiPageRepeatRow': item.get('multiPageRepeatRow', ''),
+        'closingMarkers': _safe_json(item.get('closingMarkers', '[]')),
+        'currency': item.get('currency', 'KES'),
+        'statementCount': int(item.get('statementCount', 0)),
+        'createdAt': item.get('createdAt', ''),
+        'updatedAt': item.get('updatedAt', ''),
+    }
+
+
+def _seed_bank_templates():
+    """Seed the 3 initial bank templates if none exist yet."""
+    now = now_iso()
+    seeded = 0
+    for tpl in SEED_BANK_TEMPLATES:
+        try:
+            result = table.get_item(Key={'email': tpl['email']})
+            if 'Item' not in result:
+                item = {**tpl, 'createdAt': now, 'updatedAt': now}
+                table.put_item(Item=item)
+                seeded += 1
+        except ClientError:
+            pass
+    return seeded
+
+
+def handle_get_bank_templates():
+    """Return all bank template records — seeds defaults on first call."""
+    try:
+        result = table.scan(
+            FilterExpression='begins_with(email, :prefix)',
+            ExpressionAttributeValues={':prefix': 'banktemplate#'},
+        )
+        items = result.get('Items', [])
+
+        # Auto-seed if no templates exist yet
+        if not items:
+            _seed_bank_templates()
+            result = table.scan(
+                FilterExpression='begins_with(email, :prefix)',
+                ExpressionAttributeValues={':prefix': 'banktemplate#'},
+            )
+            items = result.get('Items', [])
+
+        templates = [_parse_template_item(item) for item in items]
+        templates.sort(key=lambda t: t['bankName'])
+        return response(200, {'templates': templates})
+    except ClientError as e:
+        print(f'DynamoDB error: {e}')
+        return response(500, {'error': 'Failed to fetch bank templates.'})
+
+
+def handle_get_bank_template(slug):
+    """Return a single bank template by slug."""
+    key = f'banktemplate#{slug}'
+    try:
+        result = table.get_item(Key={'email': key})
+        if 'Item' not in result:
+            return response(404, {'error': 'Bank template not found.'})
+        return response(200, _parse_template_item(result['Item']))
+    except ClientError as e:
+        print(f'DynamoDB error: {e}')
+        return response(500, {'error': 'Failed to fetch bank template.'})
+
+
+def handle_save_bank_template(body):
+    """Create or update a bank template (upsert by slug)."""
+    slug = (body.get('bankSlug') or '').strip()
+    bank_name = (body.get('bankName') or '').strip()
+
+    if not slug:
+        return response(400, {'error': 'bankSlug is required.'})
+    if not bank_name:
+        return response(400, {'error': 'bankName is required.'})
+
+    now = now_iso()
+    key = f'banktemplate#{slug}'
+
+    # Check if existing — preserve createdAt
+    created_at = now
+    try:
+        existing = table.get_item(Key={'email': key})
+        if 'Item' in existing:
+            created_at = existing['Item'].get('createdAt', now)
+            # Increment statement count
+            body['statementCount'] = int(existing['Item'].get('statementCount', 0)) + 1
+    except ClientError:
+        pass
+
+    item = {
+        'email': key,
+        'bankSlug': slug,
+        'bankName': bank_name,
+        'aliases': json.dumps(body.get('aliases', [])),
+        'columnHeaders': json.dumps(body.get('columnHeaders', [])),
+        'columnMapping': json.dumps(body.get('columnMapping', {})),
+        'dateFormats': json.dumps(body.get('dateFormats', [])),
+        'interestPatterns': json.dumps(body.get('interestPatterns', [])),
+        'feePatterns': json.dumps(body.get('feePatterns', [])),
+        'openingBalanceMethod': body.get('openingBalanceMethod', 'first_transaction'),
+        'openingBalancePattern': body.get('openingBalancePattern', ''),
+        'transactionOrder': body.get('transactionOrder', 'chronological'),
+        'multiPageRepeatRow': body.get('multiPageRepeatRow', ''),
+        'closingMarkers': json.dumps(body.get('closingMarkers', [])),
+        'currency': body.get('currency', 'KES'),
+        'statementCount': body.get('statementCount', 0),
+        'createdAt': created_at,
+        'updatedAt': now,
+    }
+
+    try:
+        table.put_item(Item=item)
+        return response(200, _parse_template_item(item))
+    except ClientError as e:
+        print(f'DynamoDB error: {e}')
+        return response(500, {'error': 'Failed to save bank template.'})
+
+
+def handle_delete_bank_template(slug):
+    """Delete a bank template by slug."""
+    key = f'banktemplate#{slug}'
+    try:
+        table.delete_item(Key={'email': key})
+        return response(200, {'deleted': True, 'slug': slug})
+    except ClientError as e:
+        print(f'DynamoDB error: {e}')
+        return response(500, {'error': 'Failed to delete bank template.'})
+
+
 # --- Integration Config ---
 
 STRIPE_FIELDS = ['publishableKey', 'secretKey', 'basicPriceId', 'proPriceId', 'webhookSecret']
@@ -2060,6 +2270,23 @@ def lambda_handler(event, context):
     if method == 'DELETE' and '/admin/bank-rates/' in path:
         rate_id = path.split('/')[-1]
         return handle_delete_bank_rate(rate_id)
+
+    # --- Bank template routes ---
+    if method == 'GET' and path == '/admin/bank-templates':
+        return handle_get_bank_templates()
+
+    if method == 'POST' and path == '/admin/bank-templates':
+        return handle_save_bank_template(body)
+
+    # GET /admin/bank-templates/{slug}
+    if method == 'GET' and '/admin/bank-templates/' in path:
+        slug = path.split('/')[-1]
+        return handle_get_bank_template(slug)
+
+    # DELETE /admin/bank-templates/{slug}
+    if method == 'DELETE' and '/admin/bank-templates/' in path:
+        slug = path.split('/')[-1]
+        return handle_delete_bank_template(slug)
 
     # --- Integration config routes ---
     if method == 'GET' and path == '/config/payment':

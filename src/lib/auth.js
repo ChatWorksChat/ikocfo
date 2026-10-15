@@ -395,6 +395,38 @@ export async function deleteBankRate(id) {
   }
 }
 
+// --- Bank Templates API ---
+
+export async function fetchBankTemplates() {
+  try {
+    const data = await apiGet('/admin/bank-templates');
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, templates: data.templates || [] };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
+export async function saveBankTemplate(template) {
+  try {
+    const data = await apiCall('/admin/bank-templates', template);
+    if (data.error) return { success: false, error: data.error };
+    return { success: true, template: data };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
+export async function deleteBankTemplate(slug) {
+  try {
+    const data = await apiDelete(`/admin/bank-templates/${encodeURIComponent(slug)}`);
+    if (data.error) return { success: false, error: data.error };
+    return { success: true };
+  } catch {
+    return { success: false, error: 'Unable to connect to server.' };
+  }
+}
+
 export async function acceptInvite(token, password) {
   try {
     const data = await apiCall('/auth/accept-invite', { token, password });

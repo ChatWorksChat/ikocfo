@@ -1,7 +1,7 @@
 // Column auto-detection heuristics for bank statements
 
 const PATTERNS = {
-  date: [/^date$/i, /posting\s*date/i, /trans(action)?\s*date/i, /^dt$/i, /^txn\s*date$/i],
+  date: [/^date$/i, /posting\s*date/i, /trans(action)?\s*date/i, /^dt$/i, /^txn\s*date$/i, /^op\.?\s*date$/i],
   valueDate: [/^value$/i, /value\s*date/i, /^val\s*date$/i, /^val\.?\s*dt$/i],
   description: [/^desc/i, /narrative/i, /particulars/i, /details/i, /reference/i, /^narration$/i],
   debit: [/^debit/i, /^dr$/i, /withdrawal/i, /^debit\s*amount/i, /^amount\s*debit/i],
@@ -171,4 +171,155 @@ export function detectBank(rows, headers, bankRates) {
     }
   }
   return null;
+}
+
+// --- Template-aware classification ---
+
+/**
+ * Classify transactions using a bank template's interest/fee patterns
+ * instead of (or in addition to) the default regex-based classification.
+ *
+ * Falls back to the default classifyTransactions() if no template is provided.
+ */
+export function classifyWithTemplate(transactions, template) {
+  if (!template) return classifyTransactions(transactions);
+
+  const interestPatterns = template.interestPatterns || [];
+  const feePatterns = template.feePatterns || [];
+
+  // If the template uses the default account-prefixed regex, fall back to default
+  const usesDefaultRegex = interestPatterns.length > 0 &&
+    interestPatterns.every(p => p.regex && p.classification === 'account_prefixed');
+  if (usesDefaultRegex) {
+    // Use default classification but add template fee patterns
+    const classified = classifyTransactions(transactions);
+    if (feePatterns.length > 0) {
+      return classified.map(tx => {
+        if (tx.classification === 'regular') {
+          const desc = (tx.description || '').toUpperCase();
+          for (const feeKey of feePatterns) {
+            if (desc.includes(feeKey.toUpperCase())) {
+              return { ...tx, classification: 'fee' };
+            }
+          }
+        }
+        return tx;
+      });
+    }
+    return classified;
+  }
+
+  // Template uses keyword-based matching (e.g., BOA)
+  return transactions.map(tx => {
+    const desc = (tx.description || '').toUpperCase();
+    let classification = 'regular';
+
+    // Check interest patterns (keyword-based)
+    for (const pattern of interestPatterns) {
+      if (pattern.keyword && desc.includes(pattern.keyword.toUpperCase())) {
+        classification = pattern.classification || 'overdraft_interest';
+        break;
+      }
+      if (pattern.regex) {
+        const re = new RegExp(pattern.regex, 'i');
+        if (re.test(desc)) {
+          classification = pattern.classification || 'overdraft_interest';
+          break;
+        }
+      }
+    }
+
+    // Check fee patterns
+    if (classification === 'regular') {
+      for (const feeKey of feePatterns) {
+        if (desc.includes(feeKey.toUpperCase())) {
+          classification = 'fee';
+          break;
+        }
+      }
+    }
+
+    // Check loan recovery (always use default pattern)
+    if (classification === 'regular' && LOAN_RECOVERY_PATTERN.test(tx.description || '')) {
+      classification = 'loan_recovery';
+    }
+
+    return { ...tx, classification, primaryAccount: null };
+  });
+}
+
+/**
+ * Detect which bank template matches the uploaded statement.
+ * Checks preamble rows and headers against template aliases and column headers.
+ *
+ * @param {Array} rawRows - All raw rows from the parsed file
+ * @param {number} headerRowIdx - Index of the detected header row
+ * @param {Array} templates - Array of bank template objects
+ * @returns {Object|null} Matching template or null
+ */
+export function detectBankFromTemplate(rawRows, headerRowIdx, templates) {
+  if (!templates || templates.length === 0) return null;
+
+  // Build a text pool from preamble + headers + first few data rows
+  const preambleRows = rawRows.slice(0, headerRowIdx);
+  const headerRow = rawRows[headerRowIdx] || [];
+  const firstDataRows = rawRows.slice(headerRowIdx + 1, headerRowIdx + 6);
+
+  const preambleText = preambleRows
+    .map(row => row.map(cell => String(cell || '')).join(' '))
+    .join(' ')
+    .toUpperCase();
+
+  const headerTexts = headerRow.map(cell => String(cell || '').trim());
+  const headerTextUpper = headerTexts.join(' ').toUpperCase();
+
+  const dataText = firstDataRows
+    .map(row => row.map(cell => String(cell || '')).join(' '))
+    .join(' ')
+    .toUpperCase();
+
+  const combinedText = preambleText + ' ' + headerTextUpper + ' ' + dataText;
+
+  let bestMatch = null;
+  let bestScore = 0;
+
+  for (const template of templates) {
+    let score = 0;
+
+    // Check alias matches in combined text
+    const aliases = template.aliases || [];
+    for (const alias of aliases) {
+      if (combinedText.includes(alias.toUpperCase())) {
+        score += 10;
+        break;
+      }
+    }
+
+    // Check column header overlap
+    const templateHeaders = template.columnHeaders || [];
+    if (templateHeaders.length > 0) {
+      let headerMatches = 0;
+      for (const tplHeader of templateHeaders) {
+        const tplUpper = tplHeader.toUpperCase().trim();
+        for (const hdr of headerTexts) {
+          if (hdr.toUpperCase().trim() === tplUpper) {
+            headerMatches++;
+            break;
+          }
+        }
+      }
+      // Score based on fraction of template headers matched
+      if (headerMatches >= 3) {
+        score += headerMatches * 3;
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = template;
+    }
+  }
+
+  // Require a minimum confidence score (at least alias match or 3+ header matches)
+  return bestScore >= 9 ? bestMatch : null;
 }
