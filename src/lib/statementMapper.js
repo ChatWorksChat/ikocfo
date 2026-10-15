@@ -141,13 +141,16 @@ export function classifyTransactions(transactions) {
   const hasAccountPrefixed = acctNums.length > 0;
 
   // Second pass: classify each transaction
-  // PDF parsing can misalign text, so also check all column values joined
+  // PDF parsing can misalign text across columns, so also check all column values
+  // joined, and a cleaned version with dates/numbers stripped for split keywords.
   return transactions.map(tx => {
     const desc = (tx.description || '').trim();
     const fullText = Object.values(tx).filter(v => typeof v === 'string').join(' ');
+    const cleanedText = fullText.replace(/\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}/g, ' ')
+      .replace(/[\d,]+\.\d+/g, ' ').replace(/\s+/g, ' ').trim();
     let classification = 'regular';
 
-    const intMatch = desc.match(INTEREST_PATTERN) || fullText.match(INTEREST_PATTERN);
+    const intMatch = desc.match(INTEREST_PATTERN) || fullText.match(INTEREST_PATTERN) || cleanedText.match(INTEREST_PATTERN);
     if (intMatch) {
       classification = intMatch[1] === primaryAccount
         ? 'overdraft_interest'
@@ -155,7 +158,7 @@ export function classifyTransactions(transactions) {
     } else if (!hasAccountPrefixed) {
       // No Int.Coll entries found — try generic interest patterns
       for (const pattern of GENERIC_INTEREST_PATTERNS) {
-        if (pattern.test(desc) || pattern.test(fullText)) {
+        if (pattern.test(desc) || pattern.test(fullText) || pattern.test(cleanedText)) {
           classification = 'overdraft_interest';
           break;
         }
@@ -168,7 +171,7 @@ export function classifyTransactions(transactions) {
 
     if (classification === 'regular') {
       for (const pattern of FEE_PATTERNS) {
-        if (pattern.test(desc) || pattern.test(fullText)) {
+        if (pattern.test(desc) || pattern.test(fullText) || pattern.test(cleanedText)) {
           classification = 'fee';
           break;
         }
@@ -252,31 +255,39 @@ export function classifyWithTemplate(transactions, template) {
   // Template uses keyword-based matching (e.g., BOA)
   // PDF parsing can misalign text across columns (e.g., "DEBITOR" ends up in the
   // date column while "INTERESTS" is in description). Check ALL column values
-  // joined together to handle these cases.
+  // joined together, and also a cleaned version with dates/numbers stripped so that
+  // keywords split across columns (like "DEBITOR {date} INTERESTS") can be matched.
   return transactions.map(tx => {
     const desc = (tx.description || '').toUpperCase();
     const fullText = Object.values(tx).filter(v => typeof v === 'string').join(' ').toUpperCase();
+    // Strip dates and numbers so "DEBITOR 30/09/26 INTERESTS" becomes "DEBITOR INTERESTS"
+    const cleanedText = fullText.replace(/\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}/g, ' ')
+      .replace(/[\d,]+\.\d+/g, ' ').replace(/\s+/g, ' ').trim();
     let classification = 'regular';
 
-    // Check interest patterns (keyword-based) against full row text
+    // Check interest patterns (keyword-based) against description, full text, and cleaned text
     for (const pattern of interestPatterns) {
-      if (pattern.keyword && (desc.includes(pattern.keyword.toUpperCase()) || fullText.includes(pattern.keyword.toUpperCase()))) {
-        classification = pattern.classification || 'overdraft_interest';
-        break;
+      if (pattern.keyword) {
+        const kw = pattern.keyword.toUpperCase();
+        if (desc.includes(kw) || fullText.includes(kw) || cleanedText.includes(kw)) {
+          classification = pattern.classification || 'overdraft_interest';
+          break;
+        }
       }
       if (pattern.regex) {
         const re = new RegExp(pattern.regex, 'i');
-        if (re.test(desc) || re.test(fullText)) {
+        if (re.test(desc) || re.test(fullText) || re.test(cleanedText)) {
           classification = pattern.classification || 'overdraft_interest';
           break;
         }
       }
     }
 
-    // Check fee patterns against full row text
+    // Check fee patterns against full row text and cleaned text
     if (classification === 'regular') {
       for (const feeKey of feePatterns) {
-        if (desc.includes(feeKey.toUpperCase()) || fullText.includes(feeKey.toUpperCase())) {
+        const fk = feeKey.toUpperCase();
+        if (desc.includes(fk) || fullText.includes(fk) || cleanedText.includes(fk)) {
           classification = 'fee';
           break;
         }
