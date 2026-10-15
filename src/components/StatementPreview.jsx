@@ -180,6 +180,7 @@ export default function StatementPreview({ parsedData, onConfirm }) {
       const periodPatterns = [
         /(?:period|statement)\s*(?:of|from|:)\s*/i,
         /(?:from|start)\s*(?:date)?\s*:?\s*/i,
+        /(?:end|to)\s*(?:date)?\s*:?\s*/i,
         /(?:date)\s*(?:from)\s*:?\s*/i,
         /\bperiod\s+of\b/i,
       ];
@@ -321,9 +322,11 @@ export default function StatementPreview({ parsedData, onConfirm }) {
               const cells = [...row].reverse();
               for (const cell of cells) {
                 const cellStr = String(cell || '').trim();
+                // Strip currency codes (e.g., "-KES 12,640,421.05" → "-12,640,421.05")
+                const stripped = cellStr.replace(/\s/g, '').replace(/[A-Za-z]{2,4}/g, '');
                 // Must look like a monetary value (has digit, optionally with commas/decimals/minus)
-                if (/^-?[\d,]+\.?\d*$/.test(cellStr.replace(/\s/g, '')) || /^-?\d[\d,]*(\.\d+)?$/.test(cellStr.replace(/\s/g, ''))) {
-                  const val = parseNumeric(cell);
+                if (/^-?[\d,]+\.?\d*$/.test(stripped) || /^-?\d[\d,]*(\.\d+)?$/.test(stripped)) {
+                  const val = parseNumeric(stripped);
                   if (val !== 0) {
                     detected = val;
                     break;

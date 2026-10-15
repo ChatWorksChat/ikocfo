@@ -31,8 +31,9 @@ export function detectBankInterestCharged(classifiedTransactions) {
   let total = 0;
   for (const tx of classifiedTransactions) {
     if (tx.classification === 'overdraft_interest') {
-      // Interest debits appear as debit amounts (positive values reduce the balance)
-      const debit = parseNumeric(tx.debit);
+      // Interest debits appear as debit amounts. Use abs() because some PDFs
+      // represent debits as negative values (e.g., BOA: "- 186,390.16").
+      const debit = Math.abs(parseNumeric(tx.debit));
       if (debit > 0) {
         total += debit;
       } else {
@@ -106,8 +107,9 @@ export function calculateDailyInterest({
       missingValueDateCount++;
     }
 
-    const debit = parseNumeric(tx.debit);
-    const credit = parseNumeric(tx.credit);
+    // Use abs() because some PDFs represent debits/credits as negative values
+    const debit = Math.abs(parseNumeric(tx.debit));
+    const credit = Math.abs(parseNumeric(tx.credit));
     const isODInterest = tx.classification === 'overdraft_interest';
 
     // Handle future-dated transactions (after period end) — exclude

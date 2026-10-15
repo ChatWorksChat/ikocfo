@@ -116,10 +116,12 @@ const LOAN_RECOVERY_PATTERN = /\d+:Loan\s*Recovery:/i;
  */
 export function classifyTransactions(transactions) {
   // First pass: collect account numbers from Int.Coll entries
+  // Check full row text to handle PDF misalignment
   const interestAccounts = {};
   for (const tx of transactions) {
     const desc = (tx.description || '').trim();
-    const match = desc.match(INTEREST_PATTERN);
+    const fullText = Object.values(tx).filter(v => typeof v === 'string').join(' ');
+    const match = desc.match(INTEREST_PATTERN) || fullText.match(INTEREST_PATTERN);
     if (match) {
       const acctNum = match[1];
       interestAccounts[acctNum] = (interestAccounts[acctNum] || 0) + 1;
@@ -139,11 +141,13 @@ export function classifyTransactions(transactions) {
   const hasAccountPrefixed = acctNums.length > 0;
 
   // Second pass: classify each transaction
+  // PDF parsing can misalign text, so also check all column values joined
   return transactions.map(tx => {
     const desc = (tx.description || '').trim();
+    const fullText = Object.values(tx).filter(v => typeof v === 'string').join(' ');
     let classification = 'regular';
 
-    const intMatch = desc.match(INTEREST_PATTERN);
+    const intMatch = desc.match(INTEREST_PATTERN) || fullText.match(INTEREST_PATTERN);
     if (intMatch) {
       classification = intMatch[1] === primaryAccount
         ? 'overdraft_interest'
@@ -151,20 +155,20 @@ export function classifyTransactions(transactions) {
     } else if (!hasAccountPrefixed) {
       // No Int.Coll entries found — try generic interest patterns
       for (const pattern of GENERIC_INTEREST_PATTERNS) {
-        if (pattern.test(desc)) {
+        if (pattern.test(desc) || pattern.test(fullText)) {
           classification = 'overdraft_interest';
           break;
         }
       }
     }
 
-    if (classification === 'regular' && LOAN_RECOVERY_PATTERN.test(desc)) {
+    if (classification === 'regular' && (LOAN_RECOVERY_PATTERN.test(desc) || LOAN_RECOVERY_PATTERN.test(fullText))) {
       classification = 'loan_recovery';
     }
 
     if (classification === 'regular') {
       for (const pattern of FEE_PATTERNS) {
-        if (pattern.test(desc)) {
+        if (pattern.test(desc) || pattern.test(fullText)) {
           classification = 'fee';
           break;
         }
@@ -246,29 +250,33 @@ export function classifyWithTemplate(transactions, template) {
   }
 
   // Template uses keyword-based matching (e.g., BOA)
+  // PDF parsing can misalign text across columns (e.g., "DEBITOR" ends up in the
+  // date column while "INTERESTS" is in description). Check ALL column values
+  // joined together to handle these cases.
   return transactions.map(tx => {
     const desc = (tx.description || '').toUpperCase();
+    const fullText = Object.values(tx).filter(v => typeof v === 'string').join(' ').toUpperCase();
     let classification = 'regular';
 
-    // Check interest patterns (keyword-based)
+    // Check interest patterns (keyword-based) against full row text
     for (const pattern of interestPatterns) {
-      if (pattern.keyword && desc.includes(pattern.keyword.toUpperCase())) {
+      if (pattern.keyword && (desc.includes(pattern.keyword.toUpperCase()) || fullText.includes(pattern.keyword.toUpperCase()))) {
         classification = pattern.classification || 'overdraft_interest';
         break;
       }
       if (pattern.regex) {
         const re = new RegExp(pattern.regex, 'i');
-        if (re.test(desc)) {
+        if (re.test(desc) || re.test(fullText)) {
           classification = pattern.classification || 'overdraft_interest';
           break;
         }
       }
     }
 
-    // Check fee patterns
+    // Check fee patterns against full row text
     if (classification === 'regular') {
       for (const feeKey of feePatterns) {
-        if (desc.includes(feeKey.toUpperCase())) {
+        if (desc.includes(feeKey.toUpperCase()) || fullText.includes(feeKey.toUpperCase())) {
           classification = 'fee';
           break;
         }

@@ -94,6 +94,25 @@ export function parseDate(value) {
     if (!isNaN(d.getTime())) return d;
   }
 
+  // Handle dates with trailing text from PDF column misalignment
+  // (e.g., "30/09/26 DEBITOR" where text was merged with the date)
+  const leading = str.match(/^(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4})\s/);
+  if (leading) {
+    const part = leading[1];
+    const ldmy = part.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$/);
+    if (ldmy) {
+      const d = new Date(parseInt(ldmy[3]), parseInt(ldmy[2]) - 1, parseInt(ldmy[1]));
+      if (!isNaN(d.getTime())) return d;
+    }
+    const ldmy2 = part.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2})$/);
+    if (ldmy2) {
+      const yy = parseInt(ldmy2[3]);
+      const fy = yy < 50 ? 2000 + yy : 1900 + yy;
+      const d = new Date(fy, parseInt(ldmy2[2]) - 1, parseInt(ldmy2[1]));
+      if (!isNaN(d.getTime())) return d;
+    }
+  }
+
   // Fallback: native Date parsing
   const d = new Date(str);
   return isNaN(d.getTime()) ? null : d;
