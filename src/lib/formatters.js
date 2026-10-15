@@ -52,7 +52,24 @@ export function parseDate(value) {
   if (!value) return null;
   if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
 
+  // Handle Excel serial date numbers (e.g., 46235 = Aug 1, 2026)
+  // Excel serial 1 = Jan 1, 1900. Serial 60 = phantom Feb 29, 1900 (Excel bug).
+  // For serial > 59, subtract 1 to correct for the phantom leap day.
+  if (typeof value === 'number' && value >= 1 && value <= 100000 && Number.isInteger(value)) {
+    const d = new Date(1900, 0, value > 59 ? value - 1 : value);
+    if (!isNaN(d.getTime())) return d;
+  }
+
   const str = String(value).trim();
+
+  // Check for Excel serial dates as strings (pure integers like "46235")
+  if (/^\d+$/.test(str)) {
+    const serial = parseInt(str);
+    if (serial >= 1 && serial <= 100000) {
+      const d = new Date(1900, 0, serial > 59 ? serial - 1 : serial);
+      if (!isNaN(d.getTime())) return d;
+    }
+  }
 
   // Try DD/MM/YYYY or DD-MM-YYYY
   const dmy = str.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$/);

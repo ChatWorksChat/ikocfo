@@ -178,16 +178,17 @@ export default function StatementPreview({ parsedData, onConfirm }) {
       // (1) Scan preamble for explicit period/date range text
       const preamble = rawRows.slice(0, headerRowIdx);
       const periodPatterns = [
-        /(?:period|statement)\s*(?:from|:)\s*/i,
+        /(?:period|statement)\s*(?:of|from|:)\s*/i,
         /(?:from|start)\s*(?:date)?\s*:?\s*/i,
         /(?:date)\s*(?:from)\s*:?\s*/i,
+        /\bperiod\s+of\b/i,
       ];
       const dateExtractPattern = /(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}|\d{4}[/\-\.]\d{1,2}[/\-\.]\d{1,2}|\d{1,2}[\s\-]*[A-Za-z]{3,9}[\s\-]*\d{2,4})/g;
 
       for (const row of preamble) {
         const rowText = row.map(c => String(c || '')).join(' ');
         const isRelevant = periodPatterns.some(p => p.test(rowText)) ||
-          /statement\s*(period|date)/i.test(rowText);
+          /statement.*period/i.test(rowText);
         if (isRelevant) {
           // Extract all date-like strings from this row
           const dateMatches = rowText.match(dateExtractPattern);
