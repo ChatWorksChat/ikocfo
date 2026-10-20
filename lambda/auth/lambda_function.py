@@ -1880,12 +1880,35 @@ def handle_delete_bank_template(slug):
 
 STRIPE_FIELDS = ['publishableKey', 'secretKey', 'basicPriceId', 'proPriceId', 'webhookSecret']
 MPESA_FIELDS = ['consumerKey', 'consumerSecret', 'shortcode', 'passkey', 'environment', 'callbackUrl']
+PESAPAL_FIELDS = ['consumerKey', 'consumerSecret', 'ipnUrl', 'environment']
+PESAPAL_SENSITIVE_FIELDS = {'consumerKey', 'consumerSecret'}
+
+PROVIDER_CONFIG = {
+    'stripe': {
+        'fields': STRIPE_FIELDS,
+        'sensitive': STRIPE_SENSITIVE_FIELDS,
+        'configured_check': lambda item: bool(item.get('publishableKey') and item.get('basicPriceId') and item.get('proPriceId')),
+    },
+    'mpesa': {
+        'fields': MPESA_FIELDS,
+        'sensitive': MPESA_SENSITIVE_FIELDS,
+        'configured_check': lambda item: bool(item.get('consumerKey') and item.get('consumerSecret') and item.get('shortcode')),
+    },
+    'pesapal': {
+        'fields': PESAPAL_FIELDS,
+        'sensitive': PESAPAL_SENSITIVE_FIELDS,
+        'configured_check': lambda item: bool(item.get('consumerKey') and item.get('consumerSecret')),
+    },
+}
 
 
 def handle_get_config(provider):
     """Return integration config, masking sensitive fields."""
     key = f'config#{provider}'
-    sensitive = STRIPE_SENSITIVE_FIELDS if provider == 'stripe' else MPESA_SENSITIVE_FIELDS
+    prov = PROVIDER_CONFIG.get(provider)
+    if not prov:
+        return response(400, {'error': f'Unknown provider: {provider}'})
+    sensitive = prov['sensitive']
 
     try:
         result = table.get_item(Key={'email': key})
@@ -1902,12 +1925,7 @@ def handle_get_config(provider):
             else:
                 config[k] = v
 
-        # Determine if provider is configured
-        if provider == 'stripe':
-            configured = bool(item.get('publishableKey') and item.get('basicPriceId') and item.get('proPriceId'))
-        else:
-            configured = bool(item.get('consumerKey') and item.get('consumerSecret') and item.get('shortcode'))
-
+        configured = prov['configured_check'](item)
         return response(200, {'provider': provider, 'configured': configured, 'config': config})
     except ClientError as e:
         print(f'DynamoDB error: {e}')
@@ -1917,8 +1935,11 @@ def handle_get_config(provider):
 def handle_save_config(provider, body):
     """Save integration config. Merges with existing to preserve unchanged sensitive fields."""
     key = f'config#{provider}'
-    sensitive = STRIPE_SENSITIVE_FIELDS if provider == 'stripe' else MPESA_SENSITIVE_FIELDS
-    fields = STRIPE_FIELDS if provider == 'stripe' else MPESA_FIELDS
+    prov = PROVIDER_CONFIG.get(provider)
+    if not prov:
+        return response(400, {'error': f'Unknown provider: {provider}'})
+    sensitive = prov['sensitive']
+    fields = prov['fields']
 
     # Fetch existing item to preserve sensitive fields sent as masked
     try:
@@ -1951,11 +1972,7 @@ def handle_save_config(provider, body):
             else:
                 result_config[k] = v
 
-        if provider == 'stripe':
-            configured = bool(item.get('publishableKey') and item.get('basicPriceId') and item.get('proPriceId'))
-        else:
-            configured = bool(item.get('consumerKey') and item.get('consumerSecret') and item.get('shortcode'))
-
+        configured = prov['configured_check'](item)
         return response(200, {'provider': provider, 'configured': configured, 'config': result_config})
     except ClientError as e:
         print(f'DynamoDB error: {e}')
@@ -1964,7 +1981,7 @@ def handle_save_config(provider, body):
 
 def handle_get_public_config():
     """Return non-sensitive payment config for frontend use (Stripe PK, price IDs)."""
-    result_data = {'stripe': {'configured': False}, 'mpesa': {'configured': False}}
+    result_data = {'stripe': {'configured': False}, 'mpesa': {'configured': False}, 'pesapal': {'configured': False}}
     try:
         stripe_item = table.get_item(Key={'email': 'config#stripe'}).get('Item')
         if stripe_item:
@@ -1988,7 +2005,304 @@ def handle_get_public_config():
     except ClientError:
         pass
 
+    try:
+        pesapal_item = table.get_item(Key={'email': 'config#pesapal'}).get('Item')
+        if pesapal_item:
+            result_data['pesapal'] = {
+                'configured': bool(pesapal_item.get('consumerKey') and pesapal_item.get('consumerSecret')),
+                'environment': pesapal_item.get('environment', 'sandbox'),
+            }
+    except ClientError:
+        pass
+
     return response(200, result_data)
+
+
+# --- PesaPal API Helpers ---
+
+_pesapal_token_cache = {}  # {env: {'token': str, 'expires': float}}
+
+
+def _pesapal_base_url(env):
+    if env == 'production':
+        return 'https://pay.pesapal.com/v3'
+    return 'https://cybqa.pesapal.com/pesapalv3'
+
+
+def pesapal_get_token(key, secret, env='production'):
+    """Get PesaPal auth token, cached for 4 minutes."""
+    cached = _pesapal_token_cache.get(env)
+    if cached and cached['expires'] > time.time():
+        return cached['token']
+
+    url = f'{_pesapal_base_url(env)}/api/Auth/RequestToken'
+    payload = json.dumps({'consumer_key': key, 'consumer_secret': secret}).encode()
+    req = urllib.request.Request(url, data=payload, headers={
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+    })
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode())
+    token = data.get('token')
+    if not token:
+        raise Exception(f'PesaPal auth failed: {data}')
+    _pesapal_token_cache[env] = {'token': token, 'expires': time.time() + 240}
+    return token
+
+
+def pesapal_register_ipn(token, callback_url, env='production'):
+    """Register IPN URL with PesaPal, returns ipn_id."""
+    url = f'{_pesapal_base_url(env)}/api/URLSetup/RegisterIPN'
+    payload = json.dumps({
+        'url': callback_url,
+        'ipn_notification_type': 'GET',
+    }).encode()
+    req = urllib.request.Request(url, data=payload, headers={
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': f'Bearer {token}',
+    })
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode())
+    return data.get('ipn_id')
+
+
+def pesapal_submit_order(token, order, env='production'):
+    """Submit order to PesaPal, returns redirect_url and order_tracking_id."""
+    url = f'{_pesapal_base_url(env)}/api/Transactions/SubmitOrderRequest'
+    payload = json.dumps(order).encode()
+    req = urllib.request.Request(url, data=payload, headers={
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': f'Bearer {token}',
+    })
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode())
+    return data
+
+
+def pesapal_get_transaction_status(token, order_tracking_id, env='production'):
+    """Get transaction status from PesaPal."""
+    url = f'{_pesapal_base_url(env)}/api/Transactions/GetTransactionStatus?orderTrackingId={order_tracking_id}'
+    req = urllib.request.Request(url, headers={
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': f'Bearer {token}',
+    })
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode())
+    return data
+
+
+# --- PesaPal Transaction Handlers ---
+
+def handle_pesapal_create_order(body):
+    """Create a PesaPal payment order and return redirect URL."""
+    email = body.get('email', '').strip()
+    plan_id = body.get('plan', '').strip()
+    if not email or not plan_id:
+        return response(400, {'error': 'email and plan are required'})
+
+    # Get PesaPal config
+    try:
+        pp_item = table.get_item(Key={'email': 'config#pesapal'}).get('Item')
+        if not pp_item or not pp_item.get('consumerKey') or not pp_item.get('consumerSecret'):
+            return response(400, {'error': 'PesaPal is not configured'})
+    except ClientError as e:
+        print(f'DynamoDB error: {e}')
+        return response(500, {'error': 'Failed to read PesaPal config'})
+
+    consumer_key = pp_item['consumerKey']
+    consumer_secret = pp_item['consumerSecret']
+    env = pp_item.get('environment', 'production')
+    ipn_url = pp_item.get('ipnUrl', '')
+
+    try:
+        token = pesapal_get_token(consumer_key, consumer_secret, env)
+    except Exception as e:
+        print(f'PesaPal token error: {e}')
+        return response(500, {'error': 'Failed to authenticate with PesaPal'})
+
+    # Lazy-register IPN if not stored yet
+    ipn_id = pp_item.get('ipnId', '')
+    if not ipn_id and ipn_url:
+        try:
+            ipn_id = pesapal_register_ipn(token, ipn_url, env)
+            if ipn_id:
+                table.update_item(
+                    Key={'email': 'config#pesapal'},
+                    UpdateExpression='SET ipnId = :val',
+                    ExpressionAttributeValues={':val': ipn_id},
+                )
+        except Exception as e:
+            print(f'PesaPal IPN registration error: {e}')
+
+    # Determine price from plans config
+    try:
+        plans_item = table.get_item(Key={'email': 'config#plans'}).get('Item')
+        plans_list = json.loads(plans_item['plans']) if plans_item and plans_item.get('plans') else []
+    except (ClientError, json.JSONDecodeError):
+        plans_list = []
+
+    price = 0
+    currency = 'USD'
+    plan_name = plan_id.capitalize()
+    for p in plans_list:
+        if p.get('id') == plan_id:
+            price = p.get('price', 0)
+            currency = p.get('currency', 'USD')
+            plan_name = p.get('name', plan_name)
+            break
+    else:
+        # Fallback defaults
+        if plan_id == 'basic':
+            price = 9
+        elif plan_id == 'pro':
+            price = 29
+
+    if price <= 0:
+        return response(400, {'error': 'Invalid plan or zero price'})
+
+    order_tracking_id = f'IKO-{plan_id}-{int(time.time())}-{secrets.token_hex(4)}'
+
+    order = {
+        'id': order_tracking_id,
+        'currency': currency,
+        'amount': price,
+        'description': f'IKO CFO {plan_name} Plan Subscription',
+        'callback_url': f'{body.get("returnUrl", "https://ikocfo.com/pricing")}?pesapal_return=true',
+        'notification_id': ipn_id,
+        'billing_address': {
+            'email_address': email,
+            'first_name': body.get('firstName', ''),
+            'last_name': body.get('lastName', ''),
+        },
+    }
+
+    try:
+        result = pesapal_submit_order(token, order, env)
+    except Exception as e:
+        print(f'PesaPal submit order error: {e}')
+        return response(500, {'error': 'Failed to create PesaPal order'})
+
+    redirect_url = result.get('redirect_url')
+    pp_order_tracking_id = result.get('order_tracking_id', order_tracking_id)
+
+    if not redirect_url:
+        print(f'PesaPal submit order unexpected response: {result}')
+        return response(500, {'error': 'PesaPal did not return a redirect URL'})
+
+    # Store pending transaction
+    try:
+        table.put_item(Item={
+            'email': f'pesapal_txn#{pp_order_tracking_id}',
+            'userEmail': email,
+            'plan': plan_id,
+            'amount': str(price),
+            'currency': currency,
+            'status': 'pending',
+            'createdAt': now_iso(),
+        })
+    except ClientError as e:
+        print(f'DynamoDB error storing txn: {e}')
+
+    return response(200, {
+        'redirect_url': redirect_url,
+        'order_tracking_id': pp_order_tracking_id,
+    })
+
+
+def _pesapal_complete_transaction(order_tracking_id):
+    """Check PesaPal status and upgrade user if payment completed. Returns status dict."""
+    # Get transaction record
+    try:
+        txn = table.get_item(Key={'email': f'pesapal_txn#{order_tracking_id}'}).get('Item')
+        if not txn:
+            return {'status': 'not_found', 'message': 'Transaction not found'}
+    except ClientError:
+        return {'status': 'error', 'message': 'Database error'}
+
+    if txn.get('status') == 'Completed':
+        return {'status': 'Completed', 'plan': txn.get('plan')}
+
+    # Get PesaPal config
+    try:
+        pp_item = table.get_item(Key={'email': 'config#pesapal'}).get('Item')
+        if not pp_item:
+            return {'status': 'error', 'message': 'PesaPal not configured'}
+    except ClientError:
+        return {'status': 'error', 'message': 'Database error'}
+
+    env = pp_item.get('environment', 'production')
+    try:
+        token = pesapal_get_token(pp_item['consumerKey'], pp_item['consumerSecret'], env)
+        status_data = pesapal_get_transaction_status(token, order_tracking_id, env)
+    except Exception as e:
+        print(f'PesaPal status check error: {e}')
+        return {'status': 'error', 'message': 'Failed to check status with PesaPal'}
+
+    # PesaPal status_code: 0=INVALID, 1=COMPLETED, 2=FAILED, 3=REVERSED
+    payment_status_code = status_data.get('payment_status_code') or status_data.get('status_code')
+    payment_status = 'pending'
+    if payment_status_code == 1:
+        payment_status = 'Completed'
+    elif payment_status_code == 2:
+        payment_status = 'Failed'
+    elif payment_status_code == 3:
+        payment_status = 'Reversed'
+
+    # Update transaction record
+    try:
+        table.update_item(
+            Key={'email': f'pesapal_txn#{order_tracking_id}'},
+            UpdateExpression='SET #s = :s, updatedAt = :u, paymentMethod = :pm, confirmationCode = :cc',
+            ExpressionAttributeNames={'#s': 'status'},
+            ExpressionAttributeValues={
+                ':s': payment_status,
+                ':u': now_iso(),
+                ':pm': status_data.get('payment_method', ''),
+                ':cc': status_data.get('confirmation_code', ''),
+            },
+        )
+    except ClientError as e:
+        print(f'DynamoDB error updating txn: {e}')
+
+    # Upgrade user plan if completed
+    if payment_status == 'Completed':
+        user_email = txn.get('userEmail')
+        plan_id = txn.get('plan')
+        if user_email and plan_id:
+            try:
+                table.update_item(
+                    Key={'email': user_email},
+                    UpdateExpression='SET #p = :p, planUpdatedAt = :u',
+                    ExpressionAttributeNames={'#p': 'plan'},
+                    ExpressionAttributeValues={':p': plan_id, ':u': now_iso()},
+                )
+            except ClientError as e:
+                print(f'DynamoDB error upgrading user plan: {e}')
+
+    return {'status': payment_status, 'plan': txn.get('plan')}
+
+
+def handle_pesapal_ipn(query_params):
+    """Handle PesaPal IPN callback (GET with OrderTrackingId)."""
+    order_tracking_id = query_params.get('OrderTrackingId', '')
+    if not order_tracking_id:
+        return response(400, {'error': 'OrderTrackingId is required'})
+
+    result = _pesapal_complete_transaction(order_tracking_id)
+    return response(200, result)
+
+
+def handle_pesapal_check_status(query_params):
+    """Frontend polls this to check payment status after returning from PesaPal."""
+    order_tracking_id = query_params.get('orderTrackingId', '')
+    if not order_tracking_id:
+        return response(400, {'error': 'orderTrackingId is required'})
+
+    result = _pesapal_complete_transaction(order_tracking_id)
+    return response(200, result)
 
 
 # --- Pricing Plans Config ---
@@ -2157,6 +2471,8 @@ def lambda_handler(event, context):
         except (json.JSONDecodeError, TypeError):
             body = {}
 
+    query_params = event.get('queryStringParameters') or {}
+
     # --- Auth routes ---
     if method == 'POST' and path == '/auth/register':
         return handle_register(body)
@@ -2303,6 +2619,22 @@ def lambda_handler(event, context):
 
     if method == 'PUT' and path == '/admin/config/mpesa':
         return handle_save_config('mpesa', body)
+
+    if method == 'GET' and path == '/admin/config/pesapal':
+        return handle_get_config('pesapal')
+
+    if method == 'PUT' and path == '/admin/config/pesapal':
+        return handle_save_config('pesapal', body)
+
+    # --- PesaPal payment routes ---
+    if method == 'POST' and path == '/pesapal/create-order':
+        return handle_pesapal_create_order(body)
+
+    if method == 'GET' and path == '/pesapal/ipn':
+        return handle_pesapal_ipn(query_params)
+
+    if method == 'GET' and path == '/pesapal/status':
+        return handle_pesapal_check_status(query_params)
 
     # --- Pricing plans routes ---
     if method == 'GET' and path == '/config/plans':

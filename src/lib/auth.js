@@ -463,9 +463,14 @@ export async function saveIntegrationConfig(provider, config) {
 export async function fetchPublicPaymentConfig() {
   try {
     const data = await apiGet('/config/payment');
-    return { success: true, stripe: data.stripe || { configured: false }, mpesa: data.mpesa || { configured: false } };
+    return {
+      success: true,
+      stripe: data.stripe || { configured: false },
+      mpesa: data.mpesa || { configured: false },
+      pesapal: data.pesapal || { configured: false },
+    };
   } catch {
-    return { success: false, stripe: { configured: false }, mpesa: { configured: false } };
+    return { success: false, stripe: { configured: false }, mpesa: { configured: false }, pesapal: { configured: false } };
   }
 }
 

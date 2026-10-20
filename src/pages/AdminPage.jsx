@@ -68,6 +68,12 @@ export default function AdminPage() {
   const [mpesaConfigured, setMpesaConfigured] = useState(false);
   const [savingMpesa, setSavingMpesa] = useState(false);
 
+  const [showPesapalConfig, setShowPesapalConfig] = useState(false);
+  const [pesapalConfig, setPesapalConfig] = useState({});
+  const [pesapalForm, setPesapalForm] = useState({ consumerKey: '', consumerSecret: '', ipnUrl: '', environment: 'production' });
+  const [pesapalConfigured, setPesapalConfigured] = useState(false);
+  const [savingPesapal, setSavingPesapal] = useState(false);
+
   // Pricing plans state
   const [pricingPlans, setPricingPlans] = useState([]);
   const [editingPlan, setEditingPlan] = useState(null);
@@ -77,12 +83,13 @@ export default function AdminPage() {
   async function loadData() {
     setLoading(true);
     setError('');
-    const [usersRes, statsRes, ratesRes, stripeRes, mpesaRes, plansRes] = await Promise.all([
+    const [usersRes, statsRes, ratesRes, stripeRes, mpesaRes, pesapalRes, plansRes] = await Promise.all([
       fetchAdminUsers(),
       fetchAdminStats(),
       fetchBankRates(),
       fetchIntegrationConfig('stripe'),
       fetchIntegrationConfig('mpesa'),
+      fetchIntegrationConfig('pesapal'),
       fetchPlans(),
     ]);
     if (usersRes.success) setUsers(usersRes.users);
@@ -96,6 +103,10 @@ export default function AdminPage() {
     if (mpesaRes.success) {
       setMpesaConfigured(mpesaRes.configured);
       setMpesaConfig(mpesaRes.config);
+    }
+    if (pesapalRes.success) {
+      setPesapalConfigured(pesapalRes.configured);
+      setPesapalConfig(pesapalRes.config);
     }
     if (plansRes.success && plansRes.plans.length > 0) setPricingPlans(plansRes.plans);
     else setPricingPlans([
@@ -647,7 +658,7 @@ export default function AdminPage() {
 
           {/* Payment provider status */}
           <h3 style={{ marginTop: '32px', marginBottom: '16px' }}>Payment Providers</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
             {/* Stripe Card Payments */}
             <div className="glass-card" style={{ padding: '24px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
@@ -768,6 +779,60 @@ export default function AdminPage() {
                 style={{ marginTop: '16px', width: '100%' }}
               >
                 Configure M-Pesa
+              </button>
+            </div>
+
+            {/* PesaPal Payments */}
+            <div className="glass-card" style={{ padding: '24px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <div>
+                  <strong style={{ fontSize: '1rem' }}>PesaPal — Multi-Channel</strong>
+                  <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', marginTop: '2px' }}>
+                    M-Pesa, Cards, Airtel Money, Bank transfers
+                  </div>
+                </div>
+                <span style={{
+                  padding: '4px 12px', borderRadius: '20px', fontSize: 'var(--font-size-xs)', fontWeight: 700,
+                  background: pesapalConfigured ? 'rgba(46, 204, 113, 0.12)' : 'rgba(243, 156, 18, 0.12)',
+                  color: pesapalConfigured ? 'var(--color-success)' : '#b7791f',
+                }}>
+                  {pesapalConfigured ? 'Active' : 'Not Configured'}
+                </span>
+              </div>
+              <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border)' }}>
+                  <span>Consumer Key</span>
+                  <span style={{ fontFamily: 'monospace', color: pesapalConfig.consumerKey ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                    {pesapalConfig.consumerKey || 'Not set'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--color-border)' }}>
+                  <span>Consumer Secret</span>
+                  <span style={{ fontFamily: 'monospace', color: pesapalConfig.consumerSecret ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                    {pesapalConfig.consumerSecret || 'Not set'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
+                  <span>Environment</span>
+                  <span style={{ fontFamily: 'monospace' }}>
+                    {pesapalConfig.environment || 'production'}
+                  </span>
+                </div>
+              </div>
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  setPesapalForm({
+                    consumerKey: pesapalConfig.consumerKey || '',
+                    consumerSecret: pesapalConfig.consumerSecret || '',
+                    ipnUrl: pesapalConfig.ipnUrl || '',
+                    environment: pesapalConfig.environment || 'production',
+                  });
+                  setShowPesapalConfig(true);
+                }}
+                style={{ marginTop: '16px', width: '100%' }}
+              >
+                Configure PesaPal
               </button>
             </div>
           </div>
@@ -938,6 +1003,58 @@ export default function AdminPage() {
                 <div style={{ padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)' }}>
                   <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>Shortcode</div>
                   <span style={{ fontSize: '0.8rem' }}>{mpesaConfig.shortcode || 'Not set'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* PesaPal */}
+            <div className="glass-card" style={{ padding: '24px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div style={{
+                    width: '40px', height: '40px', borderRadius: '8px',
+                    background: 'linear-gradient(135deg, #1D6FA3, #27AE60)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: '#fff', fontWeight: 700, fontSize: '0.9rem',
+                  }}>P</div>
+                  <div>
+                    <strong>PesaPal</strong>
+                    <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>M-Pesa, Cards, Airtel Money, bank transfers</div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{
+                    padding: '4px 12px', borderRadius: '20px', fontSize: 'var(--font-size-xs)', fontWeight: 700,
+                    background: pesapalConfigured ? 'rgba(46, 204, 113, 0.12)' : 'rgba(243, 156, 18, 0.12)',
+                    color: pesapalConfigured ? 'var(--color-success)' : '#b7791f',
+                  }}>
+                    {pesapalConfigured ? 'Connected' : 'Not Configured'}
+                  </span>
+                  <button
+                    className="btn btn-sm btn-outline"
+                    onClick={() => {
+                      setPesapalForm({
+                        consumerKey: pesapalConfig.consumerKey || '',
+                        consumerSecret: pesapalConfig.consumerSecret || '',
+                        ipnUrl: pesapalConfig.ipnUrl || '',
+                        environment: pesapalConfig.environment || 'production',
+                      });
+                      setShowPesapalConfig(true);
+                    }}
+                    style={{ padding: '4px 12px', fontSize: '0.75rem' }}
+                  >
+                    Configure
+                  </button>
+                </div>
+              </div>
+              <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: 'var(--font-size-sm)' }}>
+                <div style={{ padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)' }}>
+                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>Environment</div>
+                  <span style={{ fontSize: '0.8rem' }}>{pesapalConfigured ? (pesapalConfig.environment || 'production') : 'Not configured'}</span>
+                </div>
+                <div style={{ padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)' }}>
+                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)', marginBottom: '4px' }}>IPN URL</div>
+                  <span style={{ fontSize: '0.8rem', wordBreak: 'break-all' }}>{pesapalConfig.ipnUrl || 'Not set'}</span>
                 </div>
               </div>
             </div>
@@ -1627,6 +1744,71 @@ export default function AdminPage() {
                   setSavingMpesa(false);
                 }}>
                 {savingMpesa ? 'Saving...' : 'Save Configuration'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PesaPal Configuration Modal */}
+      {showPesapalConfig && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 1000,
+        }} onClick={() => setShowPesapalConfig(false)}>
+          <div className="glass-card" style={{ padding: '32px', minWidth: '500px', maxWidth: '600px' }}
+               onClick={e => e.stopPropagation()}>
+            <h3 style={{ marginBottom: '20px' }}>Configure PesaPal</h3>
+            <div style={{ display: 'grid', gap: '12px' }}>
+              <div className="form-group">
+                <label className="form-label">Consumer Key</label>
+                <input className="form-input" type="password" placeholder="From PesaPal merchant portal"
+                  value={pesapalForm.consumerKey}
+                  onChange={e => setPesapalForm(f => ({ ...f, consumerKey: e.target.value }))} />
+                <small style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)' }}>
+                  Stored securely. Only the last 4 characters are shown after saving.
+                </small>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Consumer Secret</label>
+                <input className="form-input" type="password" placeholder="From PesaPal merchant portal"
+                  value={pesapalForm.consumerSecret}
+                  onChange={e => setPesapalForm(f => ({ ...f, consumerSecret: e.target.value }))} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="form-group">
+                  <label className="form-label">Environment</label>
+                  <select className="form-input" value={pesapalForm.environment}
+                    onChange={e => setPesapalForm(f => ({ ...f, environment: e.target.value }))}>
+                    <option value="sandbox">Sandbox</option>
+                    <option value="production">Production</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">IPN Callback URL</label>
+                  <input className="form-input" placeholder="https://api.ikocfo.com/pesapal/ipn"
+                    value={pesapalForm.ipnUrl}
+                    onChange={e => setPesapalForm(f => ({ ...f, ipnUrl: e.target.value }))} />
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '20px', justifyContent: 'flex-end' }}>
+              <button className="btn btn-outline" onClick={() => setShowPesapalConfig(false)}>Cancel</button>
+              <button className="btn btn-primary" disabled={savingPesapal}
+                onClick={async () => {
+                  setSavingPesapal(true);
+                  setError('');
+                  const res = await saveIntegrationConfig('pesapal', pesapalForm);
+                  if (res.success) {
+                    setPesapalConfigured(res.configured);
+                    setPesapalConfig(res.config);
+                    setShowPesapalConfig(false);
+                    setActionMsg('PesaPal configuration saved.');
+                  } else setError(res.error);
+                  setSavingPesapal(false);
+                }}>
+                {savingPesapal ? 'Saving...' : 'Save Configuration'}
               </button>
             </div>
           </div>

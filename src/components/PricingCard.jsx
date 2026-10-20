@@ -13,10 +13,6 @@ export default function PricingCard({ plan, featured, onSubscribe, currentPlan }
           {plan.description}
         </div>
       )}
-      <div className="pricing-price">
-        {plan.price === 0 ? 'Free' : `${symbol}${plan.price}`}
-        {plan.price > 0 && <span>{intervalLabel}</span>}
-      </div>
 
       <ul className="pricing-features">
         {plan.features && plan.features.length > 0 ? (
@@ -54,19 +50,25 @@ export default function PricingCard({ plan, featured, onSubscribe, currentPlan }
         )}
       </ul>
 
-      {isCurrentPlan ? (
-        <button className="btn btn-outline" disabled style={{ opacity: 0.6 }}>
-          Current Plan
-        </button>
-      ) : plan.price === 0 ? (
-        <button className="btn btn-outline" disabled style={{ opacity: 0.6 }}>
-          Default
-        </button>
-      ) : (
-        <button className="btn btn-primary" onClick={() => onSubscribe(plan.id)}>
-          Subscribe
-        </button>
-      )}
+      <div className="pricing-bottom">
+        <div className="pricing-price">
+          {plan.price === 0 ? 'Free' : `${symbol}${plan.price}`}
+          {plan.price > 0 && <span>{intervalLabel}</span>}
+        </div>
+        {isCurrentPlan ? (
+          <button className="btn btn-outline" disabled style={{ opacity: 0.6, whiteSpace: 'nowrap' }}>
+            Current Plan
+          </button>
+        ) : plan.price === 0 ? (
+          <button className="btn btn-outline" disabled style={{ opacity: 0.6, whiteSpace: 'nowrap' }}>
+            Default
+          </button>
+        ) : (
+          <button className="btn btn-primary" onClick={() => onSubscribe(plan.id)} style={{ whiteSpace: 'nowrap' }}>
+            Subscribe
+          </button>
+        )}
+      </div>
     </div>
   );
 }
