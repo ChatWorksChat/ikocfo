@@ -62,7 +62,7 @@ export function detectHeaderRow(rawRows) {
   return bestIdx;
 }
 
-export function parseFile(file) {
+export function parseFile(file, password) {
   return new Promise((resolve, reject) => {
     const ext = file.name.split('.').pop().toLowerCase();
 
@@ -71,7 +71,7 @@ export function parseFile(file) {
     } else if (ext === 'xlsx' || ext === 'xls') {
       parseXLSX(file).then(resolve).catch(reject);
     } else if (ext === 'pdf') {
-      parsePDF(file).then(resolve).catch(reject);
+      parsePDF(file, password).then(resolve).catch(reject);
     } else {
       reject(new Error(`Unsupported file format: .${ext}. Please upload a CSV, XLSX, or PDF file.`));
     }
@@ -174,9 +174,27 @@ function parseXLSX(file) {
   });
 }
 
-async function parsePDF(file) {
+async function parsePDF(file, password) {
   const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const loadingParams = { data: arrayBuffer };
+  if (password) loadingParams.password = password;
+
+  let pdf;
+  try {
+    pdf = await pdfjsLib.getDocument(loadingParams).promise;
+  } catch (err) {
+    if (err.name === 'PasswordException') {
+      const pwError = new Error(
+        err.code === 1
+          ? 'This PDF is password-protected. Please enter the password.'
+          : 'Incorrect password. Please try again.'
+      );
+      pwError.isPasswordRequired = true;
+      pwError.isWrongPassword = err.code !== 1;
+      throw pwError;
+    }
+    throw err;
+  }
 
   const allItems = [];
 

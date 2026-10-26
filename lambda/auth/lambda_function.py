@@ -323,6 +323,9 @@ def handle_register(body):
     company_address = body.get('companyAddress', '')
     position = body.get('position', '')
     phone_number = (body.get('phone_number') or '').strip()
+    industry_domain = (body.get('industryDomain') or '').strip()
+    company_size = (body.get('companySize') or '').strip()
+    geographic_area = (body.get('geographicArea') or '').strip()
 
     if not email or not password:
         return response(400, {'error': 'Email and password are required.'})
@@ -365,6 +368,12 @@ def handle_register(body):
     }
     if phone_number:
         item['phone_number'] = phone_number
+    if industry_domain:
+        item['industryDomain'] = industry_domain
+    if company_size:
+        item['companySize'] = company_size
+    if geographic_area:
+        item['geographicArea'] = geographic_area
 
     table.put_item(Item=item)
     otp_result = send_otp(item, code)
@@ -425,6 +434,7 @@ def build_user_data(user):
         'status': user.get('status', 'active'),
         'createdAt': user.get('createdAt', ''),
         'mfaEnabled': has_totp or has_webauthn,
+        'showWorkings': bool(user.get('showWorkings', False)),
     }
 
 
@@ -553,6 +563,7 @@ def handle_admin_users():
                 'createdAt': item.get('createdAt', ''),
                 'lastLoginAt': item.get('lastLoginAt', ''),
                 'mfaEnabled': has_totp or has_webauthn,
+                'showWorkings': bool(item.get('showWorkings', False)),
             })
         users.sort(key=lambda u: u.get('createdAt', ''), reverse=True)
         return response(200, {'users': users})
@@ -1365,6 +1376,7 @@ def handle_admin_edit_user(email, body):
         'plan': 'plan',
         'accountType': 'accountType',
         'companyName': 'companyName',
+        'showWorkings': 'showWorkings',
     }
 
     update_parts = []
@@ -1381,7 +1393,10 @@ def handle_admin_edit_user(email, body):
                 update_parts.append(f'{alias} = {placeholder}')
             else:
                 update_parts.append(f'{attr} = {placeholder}')
-            expr_values[placeholder] = body[key]
+            value = body[key]
+            if key == 'showWorkings':
+                value = bool(value)
+            expr_values[placeholder] = value
 
     if not update_parts:
         return response(400, {'error': 'No fields to update.'})

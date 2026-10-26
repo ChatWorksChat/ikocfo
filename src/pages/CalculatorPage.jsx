@@ -8,11 +8,12 @@ import { runCalculation } from '../lib/calculator.js';
 import FileUploader from '../components/FileUploader.jsx';
 import StatementPreview from '../components/StatementPreview.jsx';
 import ValidationScreen from '../components/ValidationScreen.jsx';
-import CalculationResults from '../components/CalculationResults.jsx';
+import CalculationResults, { STATUS_CONFIG } from '../components/CalculationResults.jsx';
 import RegulatoryFlags from '../components/RegulatoryFlags.jsx';
 import LoadingSpinner from '../components/LoadingSpinner.jsx';
 
 const STEPS = ['Upload', 'Preview', 'Confirm', 'Results'];
+const MAX_SESSION_STATEMENTS = 5;
 
 export default function CalculatorPage() {
   const user = getCurrentUser();
@@ -22,18 +23,28 @@ export default function CalculatorPage() {
   const [results, setResults] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // PDF password state
+  const [pdfPasswordRequired, setPdfPasswordRequired] = useState(false);
+  const [pdfPassword, setPdfPassword] = useState('');
+  const [pendingFile, setPendingFile] = useState(null);
+  // Multi-statement state
+  const [completedResults, setCompletedResults] = useState([]);
 
   if (!user) return null;
 
   const usage = canAnalyze(user);
   const maxRows = getMaxRows(user);
 
-  async function handleFileSelected(file) {
+  async function handleFileSelected(file, password) {
     setError('');
     const isPDF = file.name.toLowerCase().endsWith('.pdf');
     setLoading(isPDF ? 'pdf' : true);
     try {
-      const data = await parseFile(file);
+      const data = await parseFile(file, password);
+      // Clear password state on success
+      setPdfPasswordRequired(false);
+      setPdfPassword('');
+      setPendingFile(null);
       if (data.rowCount > maxRows) {
         setError(
           `This file has ${data.rowCount.toLocaleString()} rows, but your plan allows up to ${maxRows.toLocaleString()}. Please upgrade or use a smaller file.`
@@ -44,9 +55,29 @@ export default function CalculatorPage() {
       setParsedData(data);
       setStep(1);
     } catch (err) {
-      setError(err.message);
+      if (err.isPasswordRequired) {
+        setPendingFile(file);
+        setPdfPasswordRequired(true);
+        setPdfPassword('');
+        setError(err.message);
+      } else {
+        setError(err.message);
+      }
     }
     setLoading(false);
+  }
+
+  function handlePasswordSubmit(e) {
+    e.preventDefault();
+    if (!pendingFile || !pdfPassword) return;
+    handleFileSelected(pendingFile, pdfPassword);
+  }
+
+  function handlePasswordCancel() {
+    setPdfPasswordRequired(false);
+    setPdfPassword('');
+    setPendingFile(null);
+    setError('');
   }
 
   function handlePreviewConfirm(mappingSettings) {
@@ -109,12 +140,37 @@ export default function CalculatorPage() {
     }, 100);
   }
 
-  function handleReset() {
+  function handleAnalyzeAnother() {
+    // Save current results and reset for next statement
+    if (results && parsedData) {
+      setCompletedResults(prev => [...prev, {
+        id: Date.now(),
+        fileName: parsedData.fileName,
+        results,
+        settings,
+        showWorkings: !!user.showWorkings,
+      }]);
+    }
     setStep(0);
     setParsedData(null);
     setSettings(null);
     setResults(null);
     setError('');
+    setPdfPasswordRequired(false);
+    setPdfPassword('');
+    setPendingFile(null);
+  }
+
+  function handleFullReset() {
+    setStep(0);
+    setParsedData(null);
+    setSettings(null);
+    setResults(null);
+    setError('');
+    setCompletedResults([]);
+    setPdfPasswordRequired(false);
+    setPdfPassword('');
+    setPendingFile(null);
   }
 
   return (
@@ -154,7 +210,42 @@ export default function CalculatorPage() {
           {/* Step 0: Upload */}
           {step === 0 && (
             <>
-              {!usage.allowed ? (
+              {completedResults.length > 0 && (
+                <div style={{ textAlign: 'center', marginBottom: '16px', fontSize: 'var(--font-size-sm)', color: 'var(--color-text-light)' }}>
+                  Statement {completedResults.length + 1} of {MAX_SESSION_STATEMENTS}
+                </div>
+              )}
+
+              {pdfPasswordRequired ? (
+                <div className="glass-card" style={{ padding: '32px', maxWidth: '420px', margin: '0 auto' }}>
+                  <h3 style={{ marginBottom: '8px' }}>Password-Protected PDF</h3>
+                  <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-light)', marginBottom: '16px' }}>
+                    This PDF requires a password to open.
+                  </p>
+                  <form onSubmit={handlePasswordSubmit}>
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="pdfPassword">PDF Password</label>
+                      <input
+                        className="form-input"
+                        id="pdfPassword"
+                        type="password"
+                        value={pdfPassword}
+                        onChange={(e) => setPdfPassword(e.target.value)}
+                        placeholder="Enter PDF password"
+                        autoFocus
+                      />
+                    </div>
+                    <div style={{ display: 'flex', gap: '12px' }}>
+                      <button type="submit" className="btn btn-primary" disabled={!pdfPassword}>
+                        Unlock
+                      </button>
+                      <button type="button" className="btn btn-outline" onClick={handlePasswordCancel}>
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              ) : !usage.allowed ? (
                 <div className="glass-card" style={{ padding: '40px', textAlign: 'center' }}>
                   <h3>Free Analysis Used</h3>
                   <p style={{ color: 'var(--color-text-light)', margin: '12px 0 24px' }}>
@@ -190,14 +281,71 @@ export default function CalculatorPage() {
           {/* Step 3: Results */}
           {step === 3 && results && (
             <div>
-              <CalculationResults results={results} />
+              <CalculationResults results={results} showWorkings={!!user.showWorkings} />
               <RegulatoryFlags flags={results.regulatoryFlags} />
-              <div style={{ textAlign: 'center', marginTop: '24px' }}>
-                <button className="btn btn-outline" onClick={handleReset}>
-                  Analyze Another Statement
+              <div style={{ textAlign: 'center', marginTop: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+                {completedResults.length + 1 < MAX_SESSION_STATEMENTS && usage.allowed ? (
+                  <button className="btn btn-primary" onClick={handleAnalyzeAnother}>
+                    Analyze Another Statement ({completedResults.length + 1}/{MAX_SESSION_STATEMENTS})
+                  </button>
+                ) : completedResults.length + 1 >= MAX_SESSION_STATEMENTS ? (
+                  <div className="glass-card" style={{ padding: '20px', textAlign: 'center' }}>
+                    <p style={{ color: 'var(--color-text-light)', marginBottom: '12px', fontSize: 'var(--font-size-sm)' }}>
+                      You&apos;ve reached the maximum of {MAX_SESSION_STATEMENTS} statements per session.
+                      Upgrade your plan for higher limits.
+                    </p>
+                    <Link to="/pricing" className="btn btn-primary">Upgrade Plan</Link>
+                  </div>
+                ) : null}
+                <button className="btn btn-outline" onClick={handleFullReset}>
+                  Start Over
                 </button>
               </div>
             </div>
+          )}
+
+          {/* Previous completed analyses */}
+          {completedResults.length > 0 && (
+            <details style={{ marginTop: '32px' }}>
+              <summary style={{ cursor: 'pointer', fontWeight: 600, marginBottom: '12px', fontSize: 'var(--font-size-sm)' }}>
+                Previous Analyses ({completedResults.length})
+              </summary>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {completedResults.map((entry, idx) => {
+                  const di = entry.results?.dailyInterest;
+                  const statusCfg = di ? (STATUS_CONFIG[di.status] || STATUS_CONFIG.review) : null;
+                  return (
+                    <div key={entry.id} className="glass-card" style={{ padding: '16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                        <div>
+                          <strong style={{ fontSize: 'var(--font-size-sm)' }}>
+                            Statement {idx + 1}: {entry.fileName}
+                          </strong>
+                        </div>
+                        {statusCfg && (
+                          <span style={{
+                            display: 'inline-block',
+                            padding: '3px 12px',
+                            borderRadius: '12px',
+                            background: statusCfg.color,
+                            color: '#fff',
+                            fontWeight: 600,
+                            fontSize: 'var(--font-size-xs)',
+                          }}>
+                            {statusCfg.label}
+                          </span>
+                        )}
+                      </div>
+                      {di && (
+                        <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-light)', marginTop: '6px' }}>
+                          Variance: {di.variance >= 0 ? '+' : ''}{di.variance?.toFixed(2)} ({di.variancePercent >= 0 ? '+' : ''}{di.variancePercent?.toFixed(2)}%)
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
           )}
         </>
       )}

@@ -29,12 +29,15 @@ async function apiPut(path, body) {
   return res.json();
 }
 
-export async function register({ email, password, firstName, lastName, accountType, companyName, companyAddress, position, phoneNumber }) {
+export async function register({ email, password, firstName, lastName, accountType, companyName, companyAddress, position, phoneNumber, industryDomain, companySize, geographicArea }) {
   try {
     const data = await apiCall('/auth/register', {
       email, password, firstName, lastName, accountType,
       companyName, companyAddress, position,
       phone_number: phoneNumber || undefined,
+      industryDomain: industryDomain || undefined,
+      companySize: companySize || undefined,
+      geographicArea: geographicArea || undefined,
     });
     if (data.error) {
       return { success: false, error: data.error };

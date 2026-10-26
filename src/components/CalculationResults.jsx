@@ -135,7 +135,7 @@ function downloadAuditPDF(di, currency, statusCfg) {
   win.document.close();
 }
 
-const STATUS_CONFIG = {
+export const STATUS_CONFIG = {
   matches: {
     label: 'Matches',
     color: '#27ae60',
@@ -159,7 +159,7 @@ const STATUS_CONFIG = {
   },
 };
 
-export default function CalculationResults({ results }) {
+export default function CalculationResults({ results, showWorkings = false }) {
   const [showDailyTable, setShowDailyTable] = useState(false);
   const [showSecondary, setShowSecondary] = useState(false);
 
@@ -187,6 +187,7 @@ export default function CalculationResults({ results }) {
         setShowDailyTable={setShowDailyTable}
         showSecondary={showSecondary}
         setShowSecondary={setShowSecondary}
+        showWorkings={showWorkings}
       />
     );
   }
@@ -200,6 +201,7 @@ function DailyInterestView({
   costRatio, xirr,
   showDailyTable, setShowDailyTable,
   showSecondary, setShowSecondary,
+  showWorkings,
 }) {
   const statusCfg = STATUS_CONFIG[di.status] || STATUS_CONFIG.review;
 
@@ -244,6 +246,39 @@ function DailyInterestView({
         </div>
       </div>
 
+      {/* Overcharge CTA */}
+      {di.status === 'discrepancy' && (
+        <div className="glass-card" style={{
+          padding: '24px',
+          marginBottom: '24px',
+          borderLeft: '5px solid #e74c3c',
+          background: 'rgba(231, 76, 60, 0.06)',
+        }}>
+          <h3 style={{ color: '#e74c3c', marginBottom: '8px' }}>Potential Overcharge Detected</h3>
+          <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-light)', marginBottom: '16px' }}>
+            Our analysis indicates a significant discrepancy between the interest your bank charged
+            and the independently calculated amount. This could mean you have been overcharged.
+            IKO CFO can conduct a detailed expert review and help you recover excess charges.
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+            <a
+              href="https://ikocfo.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-primary"
+            >
+              Get Expert Review
+            </a>
+            <a
+              href={`mailto:info@ikocfo.com?subject=${encodeURIComponent('Overdraft Overcharge Review Request')}&body=${encodeURIComponent(`Hi IKO CFO,\n\nI ran an overdraft audit and detected a potential overcharge.\n\nVariance: ${di.variance >= 0 ? '+' : ''}${di.variance?.toFixed(2)} (${di.variancePercent >= 0 ? '+' : ''}${di.variancePercent?.toFixed(2)}%)\nExpected Interest: ${di.expectedInterest?.toFixed(2)}\nBank Interest Charged: ${di.bankInterestCharged?.toFixed(2)}\n\nI would like to request a detailed expert review.\n\nThank you.`)}`}
+              className="btn btn-outline"
+            >
+              Email IKO CFO
+            </a>
+          </div>
+        </div>
+      )}
+
       {/* Breakdown cards */}
       <div className="breakdown-grid">
         <div className="breakdown-card glass-card">
@@ -276,6 +311,7 @@ function DailyInterestView({
       </div>
 
       {/* Workings section */}
+      {showWorkings && (
       <div className="glass-card" style={{ padding: '24px', marginBottom: '24px' }}>
         <h3 style={{ marginBottom: '16px' }}>Workings</h3>
         <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-light)', marginBottom: '16px' }}>
@@ -394,8 +430,10 @@ function DailyInterestView({
           </div>
         )}
       </div>
+      )}
 
       {/* Daily Audit Table */}
+      {showWorkings && (
       <div className="glass-card" style={{ padding: '24px', marginBottom: '24px' }}>
         <div
           style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
@@ -500,6 +538,7 @@ function DailyInterestView({
           </div>
         )}
       </div>
+      )}
 
       {/* Secondary methods (collapsible) */}
       {(costRatio || xirr) && (

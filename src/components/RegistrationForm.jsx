@@ -11,6 +11,9 @@ export default function RegistrationForm({ onSubmit, error, loading }) {
     companyName: '',
     companyAddress: '',
     position: '',
+    industryDomain: '',
+    companySize: '',
+    geographicArea: '',
     authorized: false,
   });
   const [errors, setErrors] = useState({});
@@ -31,6 +34,9 @@ export default function RegistrationForm({ onSubmit, error, loading }) {
       if (!form.companyName.trim()) errs.companyName = 'Company name is required.';
       if (!form.companyAddress.trim()) errs.companyAddress = 'Company address is required.';
       if (!form.position.trim()) errs.position = 'Position is required.';
+      if (!form.industryDomain) errs.industryDomain = 'Industry domain is required.';
+      if (!form.companySize) errs.companySize = 'Company size is required.';
+      if (!form.geographicArea.trim()) errs.geographicArea = 'Geographic area is required.';
       if (!form.authorized) errs.authorized = 'Authorization is required.';
     }
 
@@ -104,6 +110,41 @@ export default function RegistrationForm({ onSubmit, error, loading }) {
             />
             {errors.lastName && <div className="form-error">{errors.lastName}</div>}
           </div>
+
+          <div className="form-group">
+            <label className="form-label" htmlFor="industryDomain">Industry (optional)</label>
+            <select
+              className="form-input"
+              id="industryDomain"
+              name="industryDomain"
+              value={form.industryDomain}
+              onChange={handleChange}
+            >
+              <option value="">Select industry...</option>
+              <option value="Banking & Finance">Banking &amp; Finance</option>
+              <option value="Manufacturing">Manufacturing</option>
+              <option value="Agriculture">Agriculture</option>
+              <option value="Retail & Trade">Retail &amp; Trade</option>
+              <option value="Real Estate">Real Estate</option>
+              <option value="Technology">Technology</option>
+              <option value="Healthcare">Healthcare</option>
+              <option value="Education">Education</option>
+              <option value="Transport & Logistics">Transport &amp; Logistics</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label" htmlFor="geographicArea">Geographic Area (optional)</label>
+            <input
+              className="form-input"
+              id="geographicArea"
+              name="geographicArea"
+              value={form.geographicArea}
+              onChange={handleChange}
+              placeholder="e.g. Nairobi, Kenya"
+            />
+          </div>
         </>
       ) : (
         <>
@@ -144,6 +185,62 @@ export default function RegistrationForm({ onSubmit, error, loading }) {
               placeholder="e.g. CFO, Finance Manager"
             />
             {errors.position && <div className="form-error">{errors.position}</div>}
+          </div>
+
+          <div className="form-group">
+            <label className="form-label" htmlFor="industryDomain">Industry Domain</label>
+            <select
+              className="form-input"
+              id="industryDomain"
+              name="industryDomain"
+              value={form.industryDomain}
+              onChange={handleChange}
+            >
+              <option value="">Select industry...</option>
+              <option value="Banking & Finance">Banking &amp; Finance</option>
+              <option value="Manufacturing">Manufacturing</option>
+              <option value="Agriculture">Agriculture</option>
+              <option value="Retail & Trade">Retail &amp; Trade</option>
+              <option value="Real Estate">Real Estate</option>
+              <option value="Technology">Technology</option>
+              <option value="Healthcare">Healthcare</option>
+              <option value="Education">Education</option>
+              <option value="Transport & Logistics">Transport &amp; Logistics</option>
+              <option value="Other">Other</option>
+            </select>
+            {errors.industryDomain && <div className="form-error">{errors.industryDomain}</div>}
+          </div>
+
+          <div className="form-group">
+            <label className="form-label" htmlFor="companySize">Company Size</label>
+            <select
+              className="form-input"
+              id="companySize"
+              name="companySize"
+              value={form.companySize}
+              onChange={handleChange}
+            >
+              <option value="">Select company size...</option>
+              <option value="1-10">1-10</option>
+              <option value="11-50">11-50</option>
+              <option value="51-200">51-200</option>
+              <option value="201-500">201-500</option>
+              <option value="500+">500+</option>
+            </select>
+            {errors.companySize && <div className="form-error">{errors.companySize}</div>}
+          </div>
+
+          <div className="form-group">
+            <label className="form-label" htmlFor="geographicArea">Geographic Area</label>
+            <input
+              className="form-input"
+              id="geographicArea"
+              name="geographicArea"
+              value={form.geographicArea}
+              onChange={handleChange}
+              placeholder="e.g. Nairobi, Kenya"
+            />
+            {errors.geographicArea && <div className="form-error">{errors.geographicArea}</div>}
           </div>
         </>
       )}
