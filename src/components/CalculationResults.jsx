@@ -2,9 +2,16 @@ import { useState } from 'react';
 import { formatPercent, formatCurrency, formatNumber, formatDate, formatDateRange } from '../lib/formatters.js';
 import * as XLSX from 'xlsx';
 
+/** Guard against CSV formula injection by prefixing dangerous leading characters with a single quote. */
+function sanitizeCell(value) {
+  if (typeof value !== 'string') return value;
+  if (/^[=+\-@]/.test(value)) return "'" + value;
+  return value;
+}
+
 function downloadAuditExcel(di, currency) {
   const rows = di.dailySchedule.map(day => ({
-    'Value Date': day.date,
+    'Value Date': sanitizeCell(day.date),
     'Opening Bal': day.openingBalance,
     'Credits': day.credits || 0,
     'Debits': day.debits || 0,
@@ -30,12 +37,12 @@ function downloadAuditExcel(di, currency) {
     { Metric: 'Expected OD Interest', Value: di.expectedInterest },
     { Metric: 'Bank Interest Charged', Value: di.bankInterestCharged },
     { Metric: 'Variance', Value: di.variance },
-    { Metric: 'Variance %', Value: `${di.variancePercent >= 0 ? '+' : ''}${di.variancePercent.toFixed(2)}%` },
+    { Metric: 'Variance %', Value: sanitizeCell(`${di.variancePercent >= 0 ? '+' : ''}${di.variancePercent.toFixed(2)}%`) },
     { Metric: 'Avg Daily OD Balance', Value: di.avgDailyODBalance },
     { Metric: 'Max Overdraft Used', Value: di.maxODBalance },
     { Metric: 'Days in Overdraft', Value: `${di.daysInOverdraft} / ${di.totalDays}` },
     { Metric: 'Annual Rate', Value: `${di.annualRate}%` },
-    { Metric: 'Day Count Basis', Value: di.dayCountBasis },
+    { Metric: 'Day Count Basis', Value: sanitizeCell(di.dayCountBasis) },
     { Metric: 'Status', Value: di.status.toUpperCase() },
   ];
 
@@ -54,6 +61,12 @@ function downloadAuditExcel(di, currency) {
   XLSX.writeFile(wb, `Audit_Schedule_${di.dailySchedule[0]?.date || 'report'}.xlsx`);
 }
 
+/** Escape a string for safe injection into HTML templates. */
+function escapeHtml(str) {
+  if (typeof str !== 'string') return str;
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function downloadAuditPDF(di, currency, statusCfg) {
   const win = window.open('', '_blank');
   if (!win) { alert('Please allow popups to download the PDF.'); return; }
@@ -69,7 +82,7 @@ function downloadAuditPDF(di, currency, statusCfg) {
     const hasOD = day.odBalance > 0;
     const bg = hasOD ? 'background:#fef2f2;' : '';
     return `<tr style="${bg}">
-      <td>${day.date}</td>
+      <td>${escapeHtml(day.date)}</td>
       <td class="r">${fc(day.openingBalance)}</td>
       <td class="r" style="color:${day.credits > 0 ? '#16a34a' : '#000'}">${day.credits > 0 ? fc(day.credits) : '--'}</td>
       <td class="r" style="color:${day.debits > 0 ? '#dc2626' : '#000'}">${day.debits > 0 ? fc(day.debits) : '--'}</td>
@@ -104,13 +117,13 @@ function downloadAuditPDF(di, currency, statusCfg) {
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 </style></head><body>
 <h1>Daily Audit Schedule</h1>
-<div class="meta">Generated ${new Date().toLocaleDateString('en-GB')} &mdash; ${currency} &mdash; ${di.dayCountBasis}</div>
+<div class="meta">Generated ${new Date().toLocaleDateString('en-GB')} &mdash; ${escapeHtml(currency)} &mdash; ${escapeHtml(di.dayCountBasis)}</div>
 
 <div class="summary">
   <div class="scard"><div class="val">${fc(di.expectedInterest)}</div><div class="lbl">Expected OD Interest</div></div>
   <div class="scard"><div class="val">${fc(di.bankInterestCharged)}</div><div class="lbl">Bank Interest Charged</div></div>
   <div class="scard"><div class="val" style="color:${statusCfg.color}">${di.variance >= 0 ? '+' : ''}${fc(di.variance)} (${di.variancePercent >= 0 ? '+' : ''}${di.variancePercent.toFixed(2)}%)</div><div class="lbl">Variance</div></div>
-  <div class="scard"><span class="status" style="background:${statusCfg.color}">${statusCfg.label}</span></div>
+  <div class="scard"><span class="status" style="background:${statusCfg.color}">${escapeHtml(statusCfg.label)}</span></div>
   <div class="scard"><div class="val">${fc(di.avgDailyODBalance)}</div><div class="lbl">Avg Daily OD Balance</div></div>
   <div class="scard"><div class="val">${di.daysInOverdraft} / ${di.totalDays}</div><div class="lbl">Days in Overdraft</div></div>
   <div class="scard"><div class="val">${di.annualRate.toFixed(2)}%</div><div class="lbl">Annual Rate</div></div>
@@ -251,10 +264,10 @@ function DailyInterestView({
         <div className="glass-card" style={{
           padding: '24px',
           marginBottom: '24px',
-          borderLeft: '5px solid #e74c3c',
+          borderLeft: '5px solid var(--color-danger)',
           background: 'rgba(231, 76, 60, 0.06)',
         }}>
-          <h3 style={{ color: '#e74c3c', marginBottom: '8px' }}>Potential Overcharge Detected</h3>
+          <h3 style={{ color: 'var(--color-danger)', marginBottom: '8px' }}>Potential Overcharge Detected</h3>
           <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-light)', marginBottom: '16px' }}>
             Our analysis indicates a significant discrepancy between the interest your bank charged
             and the independently calculated amount. This could mean you have been overcharged.

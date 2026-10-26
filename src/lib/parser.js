@@ -196,6 +196,13 @@ async function parsePDF(file, password) {
     throw err;
   }
 
+  const MAX_PDF_PAGES = 200;
+  if (pdf.numPages > MAX_PDF_PAGES) {
+    throw new Error(
+      `This PDF has ${pdf.numPages} pages, which exceeds the maximum of ${MAX_PDF_PAGES}. Please split it into smaller files.`
+    );
+  }
+
   const allItems = [];
 
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {

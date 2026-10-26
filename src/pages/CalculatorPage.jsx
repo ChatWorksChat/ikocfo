@@ -232,6 +232,7 @@ export default function CalculatorPage() {
                         value={pdfPassword}
                         onChange={(e) => setPdfPassword(e.target.value)}
                         placeholder="Enter PDF password"
+                        autoComplete="off"
                         autoFocus
                       />
                     </div>

@@ -85,23 +85,47 @@ export default function DashboardPage() {
                 <tr>
                   <th>Date</th>
                   <th>File</th>
-                  <th>Effective APR</th>
+                  <th>Variance %</th>
+                  <th>Status</th>
                   <th>Currency</th>
                   <th>Transactions</th>
                 </tr>
               </thead>
               <tbody>
-                {history.map(entry => (
-                  <tr key={entry.id}>
-                    <td>{formatDate(entry.date)}</td>
-                    <td>{entry.fileName}</td>
-                    <td style={{ fontWeight: 700, color: 'var(--color-primary)' }}>
-                      {formatPercent(entry.effectiveAPR)}
-                    </td>
-                    <td>{entry.currency}</td>
-                    <td>{entry.transactionCount}</td>
-                  </tr>
-                ))}
+                {history.map(entry => {
+                  const statusColors = {
+                    matches: 'var(--color-success)',
+                    review: 'var(--color-warning)',
+                    discrepancy: 'var(--color-danger)',
+                  };
+                  return (
+                    <tr key={entry.id}>
+                      <td>{formatDate(entry.date)}</td>
+                      <td>{entry.fileName}</td>
+                      <td style={{ fontWeight: 700, color: 'var(--color-primary)' }}>
+                        {entry.variancePercent != null ? formatPercent(entry.variancePercent) : '--'}
+                      </td>
+                      <td>
+                        {entry.status ? (
+                          <span style={{
+                            display: 'inline-block',
+                            padding: '2px 10px',
+                            borderRadius: '12px',
+                            background: statusColors[entry.status] || 'var(--color-text-muted)',
+                            color: '#fff',
+                            fontWeight: 600,
+                            fontSize: 'var(--font-size-xs)',
+                            textTransform: 'capitalize',
+                          }}>
+                            {entry.status}
+                          </span>
+                        ) : '--'}
+                      </td>
+                      <td>{entry.currency}</td>
+                      <td>{entry.transactionCount}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

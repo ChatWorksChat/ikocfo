@@ -327,11 +327,40 @@ def handle_register(body):
     company_size = (body.get('companySize') or '').strip()
     geographic_area = (body.get('geographicArea') or '').strip()
 
+    ALLOWED_INDUSTRIES = {
+        'Banking & Finance', 'Manufacturing', 'Agriculture', 'Retail & Trade',
+        'Real Estate', 'Technology', 'Healthcare', 'Education',
+        'Transport & Logistics', 'Other',
+    }
+    ALLOWED_COMPANY_SIZES = {'1-10', '11-50', '51-200', '201-500', '500+'}
+
+    if industry_domain and industry_domain not in ALLOWED_INDUSTRIES:
+        return response(400, {'error': 'Invalid industry domain.'})
+    if company_size and company_size not in ALLOWED_COMPANY_SIZES:
+        return response(400, {'error': 'Invalid company size.'})
+    if geographic_area and len(geographic_area) > 200:
+        return response(400, {'error': 'Geographic area must be 200 characters or fewer.'})
+
     if not email or not password:
         return response(400, {'error': 'Email and password are required.'})
 
     if len(password) < 8:
         return response(400, {'error': 'Password must be at least 8 characters.'})
+    if not any(c.isupper() for c in password):
+        return response(400, {'error': 'Password must contain at least one uppercase letter.'})
+    if not any(c.islower() for c in password):
+        return response(400, {'error': 'Password must contain at least one lowercase letter.'})
+    if not any(c.isdigit() for c in password):
+        return response(400, {'error': 'Password must contain at least one number.'})
+
+    # Max-length checks on free-text fields
+    for field_name, field_val, max_len in [
+        ('First name', first_name, 100), ('Last name', last_name, 100),
+        ('Company name', company_name, 200), ('Company address', company_address, 500),
+        ('Position', position, 100),
+    ]:
+        if field_val and len(field_val) > max_len:
+            return response(400, {'error': f'{field_name} must be {max_len} characters or fewer.'})
 
     # Validate phone number format if provided
     if phone_number and not re.match(r'^\+\d{10,15}$', phone_number):
@@ -451,12 +480,12 @@ def handle_login(body):
         return response(500, {'error': 'Database error.'})
 
     if 'Item' not in result:
-        return response(401, {'error': 'No account found with this email.'})
+        return response(401, {'error': 'Invalid email or password.'})
 
     user = result['Item']
 
     if user.get('password_hash') != hash_password(password):
-        return response(401, {'error': 'Incorrect password.'})
+        return response(401, {'error': 'Invalid email or password.'})
 
     if not user.get('verified'):
         return response(403, {'error': 'Please verify your email first.'})
@@ -645,7 +674,8 @@ def handle_admin_stats():
 
         return response(200, {'stats': stats})
     except ClientError as e:
-        return response(500, {'error': str(e)})
+        print(f'Admin stats error: {e}')
+        return response(500, {'error': 'Unable to load statistics.'})
 
 
 def handle_send_credentials(body):
@@ -2443,6 +2473,12 @@ def handle_reset_password(body):
 
     if len(new_password) < 8:
         return response(400, {'error': 'Password must be at least 8 characters.'})
+    if not any(c.isupper() for c in new_password):
+        return response(400, {'error': 'Password must contain at least one uppercase letter.'})
+    if not any(c.islower() for c in new_password):
+        return response(400, {'error': 'Password must contain at least one lowercase letter.'})
+    if not any(c.isdigit() for c in new_password):
+        return response(400, {'error': 'Password must contain at least one number.'})
 
     try:
         result = table.get_item(Key={'email': email})

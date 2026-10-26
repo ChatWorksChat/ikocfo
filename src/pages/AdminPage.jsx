@@ -121,6 +121,18 @@ export default function AdminPage() {
     loadData();
   }, []);
 
+  async function handleWorkingsToggle(email, currentValue) {
+    const newValue = !currentValue;
+    const result = await editUser(email, { showWorkings: newValue });
+    if (result.success) {
+      setUsers((prev) => prev.map((u) => (u.email === email ? { ...u, showWorkings: newValue } : u)));
+      setActionMsg(`Workings ${newValue ? 'enabled' : 'disabled'} for ${email}.`);
+    } else {
+      setError(result.error);
+    }
+    setTimeout(() => setActionMsg(''), 3000);
+  }
+
   async function handleStatusToggle(email, currentStatus) {
     const newStatus = currentStatus === 'active' ? 'disabled' : 'active';
     const result = await updateUserStatus(email, newStatus);
@@ -213,6 +225,7 @@ export default function AdminPage() {
       plan: u.plan || 'free',
       accountType: u.accountType || 'individual',
       companyName: u.companyName || '',
+      showWorkings: !!u.showWorkings,
     });
     setError('');
   }
@@ -501,6 +514,16 @@ export default function AdminPage() {
                         onChange={e => setEditForm({ ...editForm, companyName: e.target.value })} />
                     </div>
                   )}
+                  <div className="form-group" style={{ marginBottom: '12px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={editForm.showWorkings}
+                        onChange={e => setEditForm({ ...editForm, showWorkings: e.target.checked })}
+                      />
+                      <span className="form-label" style={{ margin: 0 }}>Show Workings</span>
+                    </label>
+                  </div>
                   <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
                     <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={saving}>
                       {saving ? 'Saving...' : 'Save Changes'}
@@ -607,6 +630,19 @@ export default function AdminPage() {
                               style={{ padding: '3px 8px', fontSize: '0.7rem' }}
                             >
                               {(u.status || 'active') === 'active' ? 'Suspend' : 'Activate'}
+                            </button>
+                            <button
+                              className="btn btn-sm btn-outline"
+                              onClick={() => handleWorkingsToggle(u.email, !!u.showWorkings)}
+                              style={{
+                                padding: '3px 8px',
+                                fontSize: '0.7rem',
+                                background: u.showWorkings ? '#16a34a' : undefined,
+                                color: u.showWorkings ? '#fff' : undefined,
+                                borderColor: u.showWorkings ? '#16a34a' : undefined,
+                              }}
+                            >
+                              Workings: {u.showWorkings ? 'ON' : 'OFF'}
                             </button>
                             <button
                               className="btn btn-sm"

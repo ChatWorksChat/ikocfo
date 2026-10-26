@@ -1,8 +1,21 @@
 import { useState, useRef } from 'react';
 
+const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
+
 export default function FileUploader({ onFileSelected, disabled }) {
   const [dragOver, setDragOver] = useState(false);
+  const [sizeError, setSizeError] = useState('');
   const inputRef = useRef(null);
+
+  function validateAndSelect(file) {
+    if (!file) return;
+    setSizeError('');
+    if (file.size > MAX_FILE_SIZE) {
+      setSizeError(`File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum size is 25 MB.`);
+      return;
+    }
+    onFileSelected(file);
+  }
 
   function handleDragOver(e) {
     e.preventDefault();
@@ -20,7 +33,7 @@ export default function FileUploader({ onFileSelected, disabled }) {
     if (disabled) return;
 
     const file = e.dataTransfer.files[0];
-    if (file) onFileSelected(file);
+    validateAndSelect(file);
   }
 
   function handleClick() {
@@ -29,7 +42,7 @@ export default function FileUploader({ onFileSelected, disabled }) {
 
   function handleChange(e) {
     const file = e.target.files[0];
-    if (file) onFileSelected(file);
+    validateAndSelect(file);
   }
 
   return (
@@ -41,6 +54,7 @@ export default function FileUploader({ onFileSelected, disabled }) {
       onClick={handleClick}
       style={disabled ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
     >
+      {sizeError && <div className="alert alert-error" style={{ marginBottom: '12px' }}>{sizeError}</div>}
       <div className="file-uploader-icon">&#128196;</div>
       <h3>Upload Bank Statement</h3>
       <p>Drag and drop your CSV, XLSX, or PDF file here, or click to browse</p>

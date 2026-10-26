@@ -50,6 +50,12 @@ export default function RegistrationForm({ onSubmit, error, loading }) {
       errs.password = 'Password is required.';
     } else if (form.password.length < 8) {
       errs.password = 'Password must be at least 8 characters.';
+    } else if (!/[A-Z]/.test(form.password)) {
+      errs.password = 'Password must contain at least one uppercase letter.';
+    } else if (!/[a-z]/.test(form.password)) {
+      errs.password = 'Password must contain at least one lowercase letter.';
+    } else if (!/[0-9]/.test(form.password)) {
+      errs.password = 'Password must contain at least one number.';
     }
 
     setErrors(errs);
@@ -270,7 +276,7 @@ export default function RegistrationForm({ onSubmit, error, loading }) {
           type="password"
           value={form.password}
           onChange={handleChange}
-          placeholder="Minimum 8 characters"
+          placeholder="Min 8 chars, upper, lower &amp; digit"
         />
         {errors.password && <div className="form-error">{errors.password}</div>}
       </div>
